@@ -1,12 +1,19 @@
-use crate::parser::*;
+#[allow(dead_code)]
+use crate::query_handler::*;
+use crate::stmt::prepare_stmt;
+use crate::table::Table;
 
 use std::io::Write;
 
-mod parser;
+mod meta_command;
+mod query_handler;
 mod row;
+mod stmt;
+mod table;
 
 fn main() -> std::io::Result<()> {
     let mut buffer = String::new();
+    let mut table = Table::new();
 
     loop {
         print_prompt();
@@ -17,7 +24,7 @@ fn main() -> std::io::Result<()> {
             handle_meta_command(input);
         } else {
             match prepare_stmt(input) {
-                Ok(stmt) => execute_stmt(stmt),
+                Ok(stmt) => execute_stmt(&stmt, &mut table),
                 Err(what) => println!("{what}"),
             };
         }
@@ -27,8 +34,4 @@ fn main() -> std::io::Result<()> {
 fn print_prompt() {
     print!("db >");
     let _ = std::io::stdout().flush();
-}
-
-fn execute_stmt(stmt: Stmt) {
-    todo!()
 }
