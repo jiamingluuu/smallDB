@@ -81,13 +81,66 @@ mod tests {
 
         let fio = fio_res.ok().unwrap();
 
-        let res1 = fio.write("hello ".as_bytes());
+        let res1 = fio.write(b"hello ");
         assert!(res1.is_ok());
         assert_eq!(6, res1.ok().unwrap());
 
-        let res2 = fio.write("world".as_bytes());
+        let res2 = fio.write(b"world");
         assert!(res2.is_ok());
         assert_eq!(5, res2.ok().unwrap());
+
+        assert!(std::fs::remove_file(path.clone()).is_ok());
+    }
+
+    #[test]
+    fn test_file_io_read() {
+        let path = PathBuf::from("/tmp/a.data");
+        let fio_res = FileIO::new(path.clone());
+        assert!(fio_res.is_ok());
+
+        let fio = fio_res.ok().unwrap();
+
+        let w1 = fio.write(b"hello ");
+        assert!(w1.is_ok());
+        assert_eq!(6, w1.ok().unwrap());
+
+        let mut buf = [0 as u8; 100];
+        let mut r = fio.read(&mut buf, 0);
+        assert!(r.is_ok());
+        assert_eq!(r.ok().unwrap(), 6);
+        let mut slice_pos = buf.iter().position(|&x| x == 0).unwrap();
+        assert_eq!(&buf[..slice_pos], b"hello ");
+
+        let w2 = fio.write(b"world");
+        assert!(w2.is_ok());
+        assert_eq!(5, w2.ok().unwrap());
+        r = fio.read(&mut buf, 0);
+        assert!(r.is_ok());
+        assert_eq!(r.ok().unwrap(), 11);
+        slice_pos = buf.iter().position(|&x| x == 0).unwrap();
+        assert_eq!(&buf[..slice_pos], b"hello world");
+
+        assert!(std::fs::remove_file(path.clone()).is_ok());
+    }
+    
+    #[test]
+    fn test_file_io_sync() {
+        let path = PathBuf::from("/tmp/a.data");
+        let fio_res = FileIO::new(path.clone());
+        assert!(fio_res.is_ok());
+
+        let fio = fio_res.ok().unwrap();
+
+        let res1 = fio.write(b"hello ");
+        assert!(res1.is_ok());
+        assert_eq!(6, res1.ok().unwrap());
+
+        let res2 = fio.write(b"world");
+        assert!(res2.is_ok());
+        assert_eq!(5, res2.ok().unwrap());
+        
+        let sync_res = fio.sync();
+        assert!(sync_res.is_ok());
 
         assert!(std::fs::remove_file(path.clone()).is_ok());
     }
