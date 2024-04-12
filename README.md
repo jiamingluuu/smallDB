@@ -2,7 +2,7 @@
 My introductory project that is used for practice my skills on writing Rust.
 
 ## Current progress
-From now, I am mainly following the tutorial provided by [this](https://cstack.github.io/db_tutorial/) website.
+Now, I am implementing a KV data storage prototype by using [Bitcask](https://riak.com/assets/bitcask-intro.pdf).
 
 ## Objectives
 If possible, I would like to extend the program into 
