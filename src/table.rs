@@ -64,13 +64,6 @@ impl Table {
             }
         }
         Ok(())
-        //
-        // let row =
-        //     bincode::deserialize::<Row>(&self.pages[page_num][byte_offset..byte_offset + ROW_SIZE])
-        //         .unwrap();
-        //
-        // println!("{}", row);
-        // Ok(())
     }
 }
 

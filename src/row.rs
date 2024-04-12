@@ -76,14 +76,18 @@ impl str::FromStr for Row {
 
 impl fmt::Display for Row {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let username_end = self.username.iter()
-                                        .position(|&x| x == 0)
-                                        .unwrap_or(self.username.len());
-        let email_end = self.email.iter()
-                                  .position(|&x| x == 0)
-                                  .unwrap_or(self.email.len());
+        let username_end = self
+            .username
+            .iter()
+            .position(|&x| x == 0)
+            .unwrap_or(self.username.len());
+        let email_end = self
+            .email
+            .iter()
+            .position(|&x| x == 0)
+            .unwrap_or(self.email.len());
         write!(
-            f, 
+            f,
             "(id: {}, username: {}, email: {})",
             self.id,
             str::from_utf8(&self.username[..username_end]).unwrap(),

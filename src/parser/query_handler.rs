@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
-use crate::meta_command::MetaCommand;
-use crate::stmt::{Stmt, StmtType};
+use crate::parser::meta_command::MetaCommand;
+use crate::parser::stmt::{Stmt, StmtType};
 use crate::table::Table;
 
 pub fn handle_meta_command(input: &str) {
@@ -17,7 +17,7 @@ pub fn execute_stmt(stmt: &Stmt, table: &mut Table) {
             if let Err(e) = table.insert(stmt.row.as_ref().unwrap()) {
                 println!("{:?}", e);
             }
-        },
+        }
         StmtType::Select => {
             if let Err(e) = table.select() {
                 println!("{:?}", e);
