@@ -28,7 +28,7 @@ impl FromStr for MetaCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_from_str_ok() {
         let input1 = ".exit";
@@ -36,13 +36,12 @@ mod tests {
         let expected1 = MetaCommand::Exit;
         assert_eq!(output1, expected1);
     }
-    
+
     #[test]
     fn test_from_str_err() {
         let input2 = "dum";
         let output2 = MetaCommand::from_str(input2).unwrap_err();
         let expected2 = "Unrecognized command dum";
         assert_eq!(output2, expected2);
-
     }
 }

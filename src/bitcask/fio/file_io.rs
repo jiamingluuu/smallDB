@@ -122,7 +122,7 @@ mod tests {
 
         assert!(std::fs::remove_file(path.clone()).is_ok());
     }
-    
+
     #[test]
     fn test_file_io_sync() {
         let path = PathBuf::from("/tmp/a.data");
@@ -138,7 +138,7 @@ mod tests {
         let res2 = fio.write(b"world");
         assert!(res2.is_ok());
         assert_eq!(5, res2.ok().unwrap());
-        
+
         let sync_res = fio.sync();
         assert!(sync_res.is_ok());
 
