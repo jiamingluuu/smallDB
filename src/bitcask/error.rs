@@ -1,14 +1,21 @@
 use std::result;
 
-pub type Result<T> = result::Result<T, StorageErrors>;
+pub type Result<T> = result::Result<T, Errors>;
 
-pub enum StorageErrors {
+#[derive(PartialEq)]
+pub enum Errors {
     DataFileNotFound,
+    DirPathIsEmpty,
+    DataFileSizeTooSmall,
+    DataDirectoryCorrupted,
     FailedToReadFromDataFile,
     FailedToWriteToDataFile,
     FailedToSyncToDataFile,
     FailedToOpenDataFile,
+    FailedToCreateDatabaseDir,
+    FailedToReadDatabaseDir,
     KeyIsEmpty,
     KeyNotFound,
     IndexUpdateFailed,
+    ReadDataFileFailed,
 }

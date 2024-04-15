@@ -6,11 +6,11 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use crate::bitcask::error::{Result, StorageErrors};
+use crate::bitcask::error::{Result, Errors};
 use crate::bitcask::fio::IOManager;
 
 pub struct FileIO {
-    pub(crate) fd: Arc<RwLock<File>>,
+    pub(crate) file: Arc<RwLock<File>>,
 }
 
 impl FileIO {
@@ -22,12 +22,12 @@ impl FileIO {
             .append(true)
             .open(file_name)
         {
-            Ok(file) => Ok(FileIO {
-                fd: Arc::new(RwLock::new(file)),
+            Ok(file_) => Ok(FileIO {
+                file: Arc::new(RwLock::new(file_)),
             }),
             Err(e) => {
                 eprintln!("[FileIO: new] Failed to open data file, {}", e);
-                Err(StorageErrors::FailedToOpenDataFile)
+                Err(Errors::FailedToOpenDataFile)
             }
         }
     }
@@ -35,34 +35,34 @@ impl FileIO {
 
 impl IOManager for FileIO {
     fn read(&self, buf: &mut [u8], ofs: u64) -> Result<usize> {
-        let read_guard = self.fd.read().unwrap();
-        match read_guard.read_at(buf, ofs) {
+        let file = self.file.read().unwrap();
+        match file.read_at(buf, ofs) {
             Ok(byte_count) => Ok(byte_count),
             Err(e) => {
                 eprintln!("[FileIO: read] Failed to read from data file, {}", e);
-                Err(StorageErrors::FailedToReadFromDataFile)
+                Err(Errors::FailedToReadFromDataFile)
             }
         }
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
-        let mut write_guard = self.fd.write().unwrap();
-        match write_guard.write(buf) {
+        let mut file = self.file.write().unwrap();
+        match file.write(buf) {
             Ok(byte_count) => Ok(byte_count),
             Err(e) => {
                 eprintln!("[FileIO: write] Failed to write to data file, {}", e);
-                Err(StorageErrors::FailedToWriteToDataFile)
+                Err(Errors::FailedToWriteToDataFile)
             }
         }
     }
 
     fn sync(&self) -> Result<()> {
-        let read_guard = self.fd.read().unwrap();
-        match read_guard.sync_all() {
+        let file = self.file.read().unwrap();
+        match file.sync_all() {
             Ok(_) => Ok(()),
             Err(e) => {
                 eprintln!("[FileIO: sync] Failed to sync to data file {}", e);
-                Err(StorageErrors::FailedToSyncToDataFile)
+                Err(Errors::FailedToSyncToDataFile)
             }
         }
     }

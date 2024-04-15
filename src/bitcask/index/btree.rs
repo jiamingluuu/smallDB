@@ -20,19 +20,19 @@ impl BTree {
 
 impl Indexer for BTree {
     fn put(&self, key: Vec<u8>, pos: LogRecordPos) -> bool {
-        let mut write_guard = self.tree.write().unwrap();
-        write_guard.insert(key, pos);
+        let mut tree = self.tree.write().unwrap();
+        tree.insert(key, pos);
         true
     }
 
     fn get(&self, key: Vec<u8>) -> Option<LogRecordPos> {
-        let read_guard = self.tree.read().unwrap();
-        read_guard.get(&key).copied()
+        let tree = self.tree.read().unwrap();
+        tree.get(&key).copied()
     }
 
     fn delete(&self, key: Vec<u8>) -> bool {
-        let mut write_guard = self.tree.write().unwrap();
-        let remove_res = write_guard.remove(&key);
+        let mut tree = self.tree.write().unwrap();
+        let remove_res = tree.remove(&key);
         remove_res.is_some()
     }
 }
@@ -60,7 +60,7 @@ mod tests {
                 ofs: 22,
             },
         );
-        assert_eq!(res1, true);
+        assert_eq!(res2, true);
     }
 
     #[test]
