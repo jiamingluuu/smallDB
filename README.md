@@ -22,7 +22,7 @@ fn main() {
     let engine = db::Engine::open(opts).expect("failed to open bitcask engine");
     let put_res1 = engine.put(
         Bytes::from("quote"),
-        Bytes::from("Shall I compare you thee to a summer day."),
+        Bytes::from("Shall I compare thee to a summer day."),
     );
     assert!(put_res1.is_ok());
     let get_res1 = engine.get(Bytes::from("quote"));
