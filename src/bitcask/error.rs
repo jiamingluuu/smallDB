@@ -2,7 +2,7 @@ use std::result;
 
 pub type Result<T> = result::Result<T, Errors>;
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum Errors {
     DataFileNotFound,
     DirPathIsEmpty,
@@ -17,5 +17,7 @@ pub enum Errors {
     KeyIsEmpty,
     KeyNotFound,
     IndexUpdateFailed,
+    InvalidLogRecordCRC,
+    ReadDataFileEOF,
     ReadDataFileFailed,
 }

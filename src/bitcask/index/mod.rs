@@ -16,7 +16,6 @@ pub trait Indexer: Sync + Send {
     fn delete(&self, key: Vec<u8>) -> bool;
 }
 
-
 pub fn new_indexer(index_type: IndexType) -> impl Indexer {
     match index_type {
         IndexType::BPTree => todo!(),

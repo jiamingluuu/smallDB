@@ -1,16 +1,16 @@
 use bytes::Bytes;
 use log::warn;
 use std::{
-    collections::HashMap, 
-    fs, 
-    path::PathBuf, 
-    sync::{Arc, RwLock}
+    collections::HashMap,
+    fs,
+    path::PathBuf,
+    sync::{Arc, RwLock},
 };
 
 use crate::bitcask::{
     data::{data_file::*, log_record::*},
-    error::{Result, Errors},
-    index::{Indexer, new_indexer},
+    error::{Errors, Result},
+    index::{new_indexer, Indexer},
     options::Options,
 };
 
@@ -21,7 +21,7 @@ pub struct Engine {
                                                        the server. */
     old_files: Arc<RwLock<HashMap<u32, DataFile>>>, /* The keydir. */
     index: Box<dyn Indexer>,                        /* Indexer used for cache. */
-    file_ids: Vec<u32>, 
+    file_ids: Vec<u32>,
 }
 
 impl Engine {
@@ -107,7 +107,7 @@ impl Engine {
 
         let pos = self.index.get(key.to_vec());
         if pos.is_none() {
-            return Ok(())
+            return Ok(());
         }
 
         let mut log_record = LogRecord {
@@ -197,7 +197,7 @@ impl Engine {
     /// Indexing all the data files.
     fn load_index_from_data_files(&self) -> Result<()> {
         if self.file_ids.is_empty() {
-            return Ok(())
+            return Ok(());
         }
 
         let active_file = self.active_file.read().unwrap();
@@ -212,7 +212,7 @@ impl Engine {
                     false => {
                         let data_file = old_files.get(file_id).unwrap();
                         data_file.read_log_record(ofs)
-                    },
+                    }
                 };
 
                 let (log_record, size) = match log_record_res {
@@ -235,7 +235,9 @@ impl Engine {
                 };
 
                 let ok = match log_record.record_type {
-                    LogRecordType::Normal => self.index.put(log_record.key.to_vec(), log_record_pos),
+                    LogRecordType::Normal => {
+                        self.index.put(log_record.key.to_vec(), log_record_pos)
+                    }
                     LogRecordType::Deleted => self.index.delete(log_record.key.to_vec()),
                 };
 
@@ -243,7 +245,7 @@ impl Engine {
                     return Err(Errors::IndexUpdateFailed);
                 }
 
-                ofs += size;
+                ofs += size as u64;
             }
 
             if i == self.file_ids.len() - 1 {
@@ -264,14 +266,15 @@ fn load_data_files(dir_path: PathBuf) -> Result<Vec<DataFile>> {
 
     let mut file_ids = Vec::<u32>::new();
     let mut data_files = Vec::<DataFile>::new();
-    for file in dir.unwrap(){
+    for file in dir.unwrap() {
         if let Ok(entry) = file {
             let file_name_ = entry.file_name();
             let file_name = file_name_.to_str().unwrap();
             if file_name.ends_with(DATA_FILE_NAME_SUFFIX) {
                 let file_id = file_name
                     .split_once(".")
-                    .unwrap().0
+                    .unwrap()
+                    .0
                     .parse::<u32>()
                     .map_err(|_| Errors::DataDirectoryCorrupted)?;
                 file_ids.push(file_id);

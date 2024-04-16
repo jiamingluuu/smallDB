@@ -1,6 +1,10 @@
 mod file_io;
 
+use std::path::PathBuf;
+
 use crate::bitcask::error::Result;
+
+use self::file_io::FileIO;
 
 /// IO managing abstraction.
 pub trait IOManager: Sync + Send {
@@ -12,4 +16,9 @@ pub trait IOManager: Sync + Send {
 
     /// Persist data
     fn sync(&self) -> Result<()>;
+}
+
+/// Initialize IOMANAGER according to the file type.
+pub fn new_io_manager(file_name: PathBuf) -> Result<impl IOManager> {
+    FileIO::new(file_name)
 }
