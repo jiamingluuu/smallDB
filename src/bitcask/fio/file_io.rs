@@ -36,35 +36,17 @@ impl FileIO {
 impl IOManager for FileIO {
     fn read(&self, buf: &mut [u8], ofs: u64) -> Result<usize> {
         let file = self.file.read().unwrap();
-        match file.read_at(buf, ofs) {
-            Ok(byte_count) => Ok(byte_count),
-            Err(e) => {
-                eprintln!("[FileIO: read] Failed to read from data file, {}", e);
-                Err(Errors::FailedToReadFromDataFile)
-            }
-        }
+        file.read_at(buf, ofs).map_err(|_| Errors::FailedToOpenDataFile)
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let mut file = self.file.write().unwrap();
-        match file.write(buf) {
-            Ok(byte_count) => Ok(byte_count),
-            Err(e) => {
-                eprintln!("[FileIO: write] Failed to write to data file, {}", e);
-                Err(Errors::FailedToWriteToDataFile)
-            }
-        }
+        file.write(buf).map_err(|_| Errors::FailedToWriteToDataFile)
     }
 
     fn sync(&self) -> Result<()> {
         let file = self.file.read().unwrap();
-        match file.sync_all() {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                eprintln!("[FileIO: sync] Failed to sync to data file {}", e);
-                Err(Errors::FailedToSyncToDataFile)
-            }
-        }
+        file.sync_all().map_err(|_| Errors::FailedToSyncToDataFile)
     }
 }
 
@@ -94,13 +76,13 @@ mod tests {
 
     #[test]
     fn test_file_io_read() {
-        let path = PathBuf::from("/tmp/a.data");
+        let path = PathBuf::from("/tmp/b.data");
         let fio_res = FileIO::new(path.clone());
         assert!(fio_res.is_ok());
 
         let fio = fio_res.ok().unwrap();
 
-        let w1 = fio.write(b"hello ");
+        let w1 = fio.write("hello ".as_bytes());
         assert!(w1.is_ok());
         assert_eq!(6, w1.ok().unwrap());
 
@@ -125,7 +107,7 @@ mod tests {
 
     #[test]
     fn test_file_io_sync() {
-        let path = PathBuf::from("/tmp/a.data");
+        let path = PathBuf::from("/tmp/c.data");
         let fio_res = FileIO::new(path.clone());
         assert!(fio_res.is_ok());
 

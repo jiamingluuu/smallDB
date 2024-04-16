@@ -103,7 +103,6 @@ mod tests {
     #[test]
     fn test_display() {
         let r1: Row = Row::new("1", "alice", "alice@example.com").unwrap();
-        let r2: Row = Row::new("2", "bob", "bob@example.com").unwrap();
 
         assert_eq!(
             format!("{}", r1),

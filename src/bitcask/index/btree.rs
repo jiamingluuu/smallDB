@@ -82,15 +82,15 @@ mod tests {
                 ofs: 22,
             },
         );
-        assert_eq!(res1, true);
+        assert_eq!(res2, true);
 
         let pos1 = bt.get("".as_bytes().to_vec());
         assert_eq!(pos1.unwrap().file_id, 1);
         assert_eq!(pos1.unwrap().ofs, 10);
 
-        let pos1 = bt.get("aa".as_bytes().to_vec());
-        assert_eq!(pos1.unwrap().file_id, 11);
-        assert_eq!(pos1.unwrap().ofs, 22);
+        let pos2 = bt.get("aa".as_bytes().to_vec());
+        assert_eq!(pos2.unwrap().file_id, 11);
+        assert_eq!(pos2.unwrap().ofs, 22);
     }
 
     #[test]
@@ -112,7 +112,7 @@ mod tests {
                 ofs: 22,
             },
         );
-        assert_eq!(res1, true);
+        assert_eq!(res2, true);
 
         let del1 = bt.delete("".as_bytes().to_vec());
         assert!(del1);
