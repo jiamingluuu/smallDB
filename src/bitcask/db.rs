@@ -25,7 +25,7 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// Open an instance of database instance with configuration OPTS.
+    /// Open a bitcast instance with configuration OPTS.
     pub fn open(opts: Options) -> Result<Self> {
         if let Some(e) = check_options(&opts) {
             return Err(e);
@@ -39,13 +39,14 @@ impl Engine {
                 return Err(Errors::FailedToSyncToDataFile);
             }
         }
-        
+
         let mut data_files = load_data_files(dir_path.clone())?;
         let file_ids: Vec<u32> = data_files
             .iter()
             .map(|data_file| data_file.get_file_id())
             .collect();
-        
+
+        // The last file is the active file, and the rest are old files.
         let mut old_files = HashMap::new();
         if data_files.len() > 1 {
             for _ in 0..=data_files.len() - 2 {
@@ -53,26 +54,28 @@ impl Engine {
                 old_files.insert(data_file.get_file_id(), data_file);
             }
         };
-        
+
         let active_file = match data_files.pop() {
             Some(v) => v,
+            // It is possible to have an empty directory, in this case we create a NULL active
+            // file.
             None => DataFile::new(&dir_path, INITIAL_FILE_ID)?,
         };
 
-        let mut engine = Self {
+        let engine = Self {
             options: Arc::new(opts),
             active_file: Arc::new(RwLock::new(active_file)),
             old_files: Arc::new(RwLock::new(old_files)),
             index: Box::new(new_indexer(options.index_type)),
             file_ids,
         };
-        
+
         engine.load_index_from_data_files()?;
-        
+
         Ok(engine)
     }
 
-    /// Write key KEY with value VALUE into the database
+    /// Write the pair (KEY, VALUE) into the database
     pub fn put(&self, key: Bytes, value: Bytes) -> Result<()> {
         if key.is_empty() {
             return Err(Errors::KeyIsEmpty);
@@ -87,6 +90,34 @@ impl Engine {
         // Update the location of newest data.
         let log_record_pos = self.append_log_record(&mut log_record)?;
         if !self.index.put(key.to_vec(), log_record_pos) {
+            return Err(Errors::IndexUpdateFailed);
+        }
+
+        Ok(())
+    }
+
+    /// Delete the entry with key KEY.
+    pub fn delete(&self, key: Bytes) -> Result<()> {
+        // On merging, bitcask will write the newest log record to the disk. Hence, in order to
+        // delete a record, all we need to do is just append the record with an entry that has the
+        // same key but with the tombstone set to DELETED.
+        if key.is_empty() {
+            return Err(Errors::KeyIsEmpty);
+        }
+
+        let pos = self.index.get(key.to_vec());
+        if pos.is_none() {
+            return Ok(())
+        }
+
+        let mut log_record = LogRecord {
+            key: key.to_vec(),
+            value: Default::default(),
+            record_type: LogRecordType::Deleted,
+        };
+
+        self.append_log_record(&mut log_record)?;
+        if !self.index.delete(key.to_vec()) {
             return Err(Errors::IndexUpdateFailed);
         }
 
@@ -162,12 +193,13 @@ impl Engine {
             ofs: active_file.get_write_ofs(),
         })
     }
-    
+
+    /// Indexing all the data files.
     fn load_index_from_data_files(&self) -> Result<()> {
         if self.file_ids.is_empty() {
             return Ok(())
         }
-        
+
         let active_file = self.active_file.read().unwrap();
         let old_files = self.old_files.read().unwrap();
 
@@ -182,13 +214,13 @@ impl Engine {
                         data_file.read_log_record(ofs)
                     },
                 };
-                
+
                 let (log_record, size) = match log_record_res {
                     Ok(result) => result,
                     Err(e) => {
                         if e == Errors::ReadDataFileFailed {
-                            // Err() indicates all content within the current file has been read,
-                            // therefore, we break the current loop and read the next file.
+                            // This case indicates all content within the current file has been
+                            // read. Therefore, we break the current loop and read the next file.
                             break;
                         } else {
                             return Err(e);
@@ -201,12 +233,16 @@ impl Engine {
                     file_id: *file_id,
                     ofs,
                 };
-                
-                match log_record.record_type {
+
+                let ok = match log_record.record_type {
                     LogRecordType::Normal => self.index.put(log_record.key.to_vec(), log_record_pos),
                     LogRecordType::Deleted => self.index.delete(log_record.key.to_vec()),
                 };
-                
+
+                if !ok {
+                    return Err(Errors::IndexUpdateFailed);
+                }
+
                 ofs += size;
             }
 
@@ -214,11 +250,12 @@ impl Engine {
                 active_file.set_write_ofs(ofs)
             }
         }
-        
+
         Ok(())
     }
 }
 
+/// Fetch all data files under directory DIR_PATH.
 fn load_data_files(dir_path: PathBuf) -> Result<Vec<DataFile>> {
     let dir = fs::read_dir(dir_path.clone());
     if dir.is_err() {
@@ -241,7 +278,7 @@ fn load_data_files(dir_path: PathBuf) -> Result<Vec<DataFile>> {
             }
         }
     }
-    
+
     file_ids.sort();
     for file_id in file_ids {
         data_files.push(DataFile::new(&dir_path, file_id)?);
