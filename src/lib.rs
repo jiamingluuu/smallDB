@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-mod bitcask;
-mod parser;
-mod row;
-mod table;
+pub mod bitcask;
+pub mod parser;
+pub mod row;
+pub mod table;

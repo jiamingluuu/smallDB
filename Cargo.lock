@@ -39,20 +39,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "db"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "bytes",
- "crc32fast",
- "log",
- "prost",
- "serde",
- "serde_bytes",
- "serde_json",
-]
-
-[[package]]
 name = "either"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -164,6 +150,20 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "smallDB"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "bytes",
+ "crc32fast",
+ "log",
+ "prost",
+ "serde",
+ "serde_bytes",
+ "serde_json",
 ]
 
 [[package]]

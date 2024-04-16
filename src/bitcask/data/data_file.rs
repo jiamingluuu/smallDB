@@ -1,5 +1,4 @@
 use bytes::{Buf, BytesMut};
-use log::Log;
 use prost::{decode_length_delimiter, length_delimiter_len};
 
 use std::{
@@ -53,9 +52,7 @@ impl DataFile {
     // Read the log record from
     pub fn read_log_record(&self, ofs: u64) -> Result<(LogRecord, usize)> {
         let mut header_buf = BytesMut::zeroed(max_log_record_header_size());
-        println!("[read_log_record] ofs: {}", ofs);
         self.io_manager.read(&mut header_buf, ofs)?;
-        println!("[read_log_record] header_buf: {:?}", header_buf);
 
         let record_type = LogRecordType::from_u8(header_buf.get_u8());
         let key_size = decode_length_delimiter(&mut header_buf).unwrap();
@@ -67,11 +64,12 @@ impl DataFile {
         }
 
         // HEADER_SIZE = 1 bytes for type + len(key_size) + len(value_size)
-        let header_size = RECORD_TYPE_LEN + length_delimiter_len(key_size) 
-            + length_delimiter_len(value_size);
+        let header_size =
+            RECORD_TYPE_LEN + length_delimiter_len(key_size) + length_delimiter_len(value_size);
 
         let mut kv_buf = BytesMut::zeroed(key_size + value_size + CRC_LEN);
-        self.io_manager.read(&mut kv_buf, ofs + header_size as u64)?;
+        self.io_manager
+            .read(&mut kv_buf, ofs + header_size as u64)?;
         let log_record = LogRecord {
             key: kv_buf.get(..key_size).unwrap().to_vec(),
             value: kv_buf.get(key_size..kv_buf.len() - 4).unwrap().to_vec(),
@@ -165,7 +163,7 @@ mod tests {
         assert!(sync_res.is_ok());
         assert!(fs::remove_file(get_data_file_name(&dir_path, data_file1.get_file_id())).is_ok());
     }
-    
+
     #[test]
     fn test_data_file_rld_multiple_rw() {
         let dir_path = std::env::temp_dir();
@@ -202,7 +200,7 @@ mod tests {
         assert_eq!(read2, record2);
         assert!(fs::remove_file(get_data_file_name(&dir_path, data_file1.get_file_id())).is_ok());
     }
-    
+
     #[test]
     fn test_data_file_rld_deleted() {
         let dir_path = std::env::temp_dir();

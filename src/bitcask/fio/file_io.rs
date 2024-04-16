@@ -36,7 +36,8 @@ impl FileIO {
 impl IOManager for FileIO {
     fn read(&self, buf: &mut [u8], ofs: u64) -> Result<usize> {
         let file = self.file.read().unwrap();
-        file.read_at(buf, ofs).map_err(|_| Errors::FailedToOpenDataFile)
+        file.read_at(buf, ofs)
+            .map_err(|_| Errors::FailedToOpenDataFile)
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {

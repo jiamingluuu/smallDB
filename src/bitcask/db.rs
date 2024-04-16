@@ -273,7 +273,8 @@ fn load_data_files(dir_path: PathBuf) -> Result<Vec<DataFile>> {
             if file_name.ends_with(DATA_FILE_NAME_SUFFIX) {
                 let file_id = file_name
                     .split_once(".")
-                    .unwrap().0
+                    .unwrap()
+                    .0
                     .parse::<u32>()
                     .map_err(|_| Errors::DataDirectoryCorrupted)?;
                 file_ids.push(file_id);

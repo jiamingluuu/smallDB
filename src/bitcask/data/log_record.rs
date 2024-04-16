@@ -1,4 +1,4 @@
-use bytes::{BytesMut, BufMut};
+use bytes::{BufMut, BytesMut};
 use prost::{encode_length_delimiter, length_delimiter_len};
 
 use crate::bitcask::data::data_file::CRC_LEN;
@@ -47,35 +47,35 @@ impl LogRecord {
         let (_, crc) = self.encode_and_get_crc();
         crc
     }
-    
+
     fn encode_and_get_crc(&self) -> (Vec<u8>, u32) {
         let mut buf = BytesMut::new();
         buf.reserve(self.get_encoded_record_length());
-        
+
         // Append BUF with the encoded TYPE, KEY_SIZE, VALUE_SIZE, KEY, VALUE.
         buf.put_u8(self.record_type as u8);
         encode_length_delimiter(self.key.len(), &mut buf).unwrap();
         encode_length_delimiter(self.value.len(), &mut buf).unwrap();
         buf.extend_from_slice(&self.key);
         buf.extend_from_slice(&self.value);
-        
+
         // Append Buf with CRC.
         let mut hasher = crc32fast::Hasher::new();
         hasher.update(&buf);
         let crc = hasher.finalize();
         buf.put_u32(crc);
-        
+
         (buf.to_vec(), crc)
     }
-    
+
     /// Calculate the size of a LOG_RECORD after encoding.
     fn get_encoded_record_length(&self) -> usize {
         std::mem::size_of::<u8>()
-        + length_delimiter_len(self.key.len())
-        + length_delimiter_len(self.value.len())
-        + self.key.len()
-        + self.value.len()
-        + CRC_LEN
+            + length_delimiter_len(self.key.len())
+            + length_delimiter_len(self.value.len())
+            + self.key.len()
+            + self.value.len()
+            + CRC_LEN
     }
 }
 
