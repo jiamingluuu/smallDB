@@ -1,6 +1,6 @@
 pub mod data;
 pub mod db;
-pub mod error;
+pub mod errors;
 pub mod fio;
 pub mod index;
 pub mod options;

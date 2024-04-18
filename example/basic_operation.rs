@@ -5,7 +5,7 @@ use smallDB::bitcask::{db, options::Options};
 
 fn main() {
     let opts = Options::default();
-    let dir_path = opts.dir_path.clone();       // manually clean up the legacy
+    let dir_path = opts.dir_path.clone(); // manually clean up the legacy
     let engine = db::Engine::open(opts).expect("failed to open bitcask engine");
     let put_res1 = engine.put(
         Bytes::from("quote"),

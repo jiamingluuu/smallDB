@@ -1,10 +1,10 @@
 use bytes::Bytes;
 
-fn get_test_key(key: i32) -> Bytes {
+pub fn get_test_key(key: i32) -> Bytes {
     Bytes::from(std::format!("bitcask-key{:09}", key))
 }
 
-fn get_test_value(value: i32) -> Bytes {
+pub fn get_test_value(value: i32) -> Bytes {
     Bytes::from(std::format!("bitcask-key{:09}", value))
 }
 
