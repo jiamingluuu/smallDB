@@ -1,9 +1,9 @@
 use bytes::Bytes;
 use log::warn;
 use std::{
-    collections::HashMap,
-    fs,
-    path::PathBuf,
+    collections::HashMap, 
+    fs, 
+    path::PathBuf, 
     sync::{Arc, RwLock},
 };
 
@@ -46,6 +46,7 @@ impl Engine {
             .map(|data_file| data_file.get_file_id())
             .collect();
 
+        data_files.reverse();
         // The last file is the active file, and the rest are old files.
         let mut old_files = HashMap::new();
         if data_files.len() > 1 {
@@ -183,6 +184,8 @@ impl Engine {
             *active_file = new_file;
         }
 
+        // write to the current active file.
+        let write_ofs = active_file.get_write_ofs();
         active_file.write(&encoded_record)?;
         if self.options.sync_writes {
             active_file.sync()?;
@@ -190,7 +193,7 @@ impl Engine {
 
         Ok(LogRecordPos {
             file_id: active_file.get_file_id(),
-            ofs: active_file.get_write_ofs(),
+            ofs: write_ofs,
         })
     }
 
