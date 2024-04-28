@@ -3,8 +3,14 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use crate::bitcask::data::log_record::LogRecordPos;
-use crate::bitcask::index::Indexer;
+use bytes::Bytes;
+
+use crate::bitcask::{
+    data::log_record::LogRecordPos,
+    errors::Result,
+    index::{IndexIterator, Indexer},
+    options::IteratorOptions,
+};
 
 pub struct BTree {
     tree: Arc<RwLock<BTreeMap<Vec<u8>, LogRecordPos>>>,
@@ -34,6 +40,73 @@ impl Indexer for BTree {
         let mut tree = self.tree.write().unwrap();
         let remove_res = tree.remove(&key);
         remove_res.is_some()
+    }
+
+    fn list_keys(&self) -> Result<Vec<Bytes>> {
+        let read_guard = self.tree.read().unwrap();
+        let mut keys = Vec::with_capacity(read_guard.len());
+        for (k, _) in read_guard.iter() {
+            keys.push(Bytes::copy_from_slice(&k));
+        }
+        Ok(keys)
+    }
+
+    fn iterator(&self, options: IteratorOptions) -> Box<dyn IndexIterator> {
+        let read_guard = self.tree.read().unwrap();
+        let mut items = Vec::with_capacity(read_guard.len());
+        // 将 BTree 中的数据存储到数组中
+        for (key, value) in read_guard.iter() {
+            items.push((key.clone(), value.clone()));
+        }
+        if options.reverse {
+            items.reverse();
+        }
+        Box::new(BTreeIterator {
+            items,
+            curr_index: 0,
+            options,
+        })
+    }
+}
+
+/// Iterator for BTree
+pub struct BTreeIterator {
+    items: Vec<(Vec<u8>, LogRecordPos)>, // Storing the key and log record position
+    curr_index: usize,        // the current position of iterator.
+    options: IteratorOptions, // the config for iterator.
+}
+
+impl IndexIterator for BTreeIterator {
+    fn rewind(&mut self) {
+        self.curr_index = 0;
+    }
+
+    fn seek(&mut self, key: Vec<u8>) {
+        self.curr_index = match self.items.binary_search_by(|(x, _)| {
+            if self.options.reverse {
+                x.cmp(&key).reverse()
+            } else {
+                x.cmp(&key)
+            }
+        }) {
+            Ok(equal_val) => equal_val,
+            Err(insert_val) => insert_val,
+        };
+    }
+
+    fn next(&mut self) -> Option<(&Vec<u8>, &LogRecordPos)> {
+        if self.curr_index >= self.items.len() {
+            return None;
+        }
+
+        while let Some(item) = self.items.get(self.curr_index) {
+            self.curr_index += 1;
+            let prefix = &self.options.prefix;
+            if prefix.is_empty() || item.0.starts_with(&prefix) {
+                return Some((&item.0, &item.1));
+            }
+        }
+        None
     }
 }
 

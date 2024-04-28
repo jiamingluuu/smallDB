@@ -11,8 +11,16 @@ If possible, I would like to extend the program into
     - Use HTTP to enable data sharing.
     - Complete [MIT 6.824](https://pdos.csail.mit.edu/6.824/schedule.html), and bring usefulness of the [Raft consensus algorithm](https://pdos.csail.mit.edu/6.824/papers/raft-extended.pdf) into my design 
 
-
 ## Example
+**Disclaimer**
+
+This project is still under construction. Executing the followings codes will
+generates data files in a temporary, directory. However, data clean up, after
+database shutdown (cause by either panic or user's command), and data
+restoration after a shutdown are all not implemented yet. Therefore, there
+unexpected behaviour may happens (included but not limited to security issue). 
+The author of this repository holds no responsibility to your loss.
+
 ```rs
 use bytes::Bytes;
 use smallDB::bitcask::{db, options::Options};

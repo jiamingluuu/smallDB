@@ -2,7 +2,7 @@ pub mod file_io;
 
 use std::path::PathBuf;
 
-use crate::bitcask::error::Result;
+use crate::bitcask::errors::Result;
 
 use self::file_io::FileIO;
 

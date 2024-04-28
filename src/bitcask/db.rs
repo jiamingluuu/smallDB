@@ -9,19 +9,18 @@ use std::{
 
 use crate::bitcask::{
     data::{data_file::*, log_record::*},
-    error::{Errors, Result},
+    errors::{Errors, Result},
     index::{new_indexer, Indexer},
     options::Options,
 };
 
 /// struct used for storage, the running instance of Bitcask
 pub struct Engine {
-    options: Arc<Options>,                          /* The configuration for the database */
-    active_file: Arc<RwLock<DataFile>>,             /* A file is active only if it is writing by
-                                                       the server. */
-    old_files: Arc<RwLock<HashMap<u32, DataFile>>>, /* The keydir. */
-    index: Box<dyn Indexer>,                        /* Indexer used for cache. */
-    file_ids: Vec<u32>,
+    pub(crate) options: Arc<Options>, // The configuration for the database
+    pub(crate) active_file: Arc<RwLock<DataFile>>, // A file is active only if it is writing by the server.
+    pub(crate) old_files: Arc<RwLock<HashMap<u32, DataFile>>>, // The keydir.
+    pub(crate) index: Box<dyn Indexer>,            // Indexer used for cache.
+    pub(crate) file_ids: Vec<u32>,
 }
 
 impl Engine {
@@ -138,24 +137,34 @@ impl Engine {
         // If the record position is at active file, read it from active file, otherwise read it
         // from old files.
         let log_record_pos = pos.unwrap();
+
+        self.get_value_by_position(&log_record_pos)
+    }
+
+    pub(crate) fn get_value_by_position(&self, log_record_pos: &LogRecordPos) -> Result<Bytes> {
+        // Get the log record by using LOG_RECORD_POS
         let active_file = self.active_file.read().unwrap();
         let old_files = self.old_files.read().unwrap();
-        let (log_record, _) = if active_file.get_file_id() == log_record_pos.file_id {
-            active_file.read_log_record(log_record_pos.ofs)?
-        } else {
-            match old_files.get(&log_record_pos.file_id) {
-                None => return Err(Errors::DataFileNotFound),
-                Some(data_file) => data_file.read_log_record(log_record_pos.ofs)?,
+        let log_record = match active_file.get_file_id() == log_record_pos.file_id {
+            true => active_file.read_log_record(log_record_pos.ofs)?.0,
+            false => {
+                let data_file = old_files.get(&log_record_pos.file_id);
+                if data_file.is_none() {
+                    return Err(Errors::DataFileNotFound);
+                }
+                data_file
+                    .unwrap()
+                    .read_log_record(log_record_pos.ofs)?.0
             }
         };
 
-        // Check if the current record has been deleted
         if log_record.record_type == LogRecordType::Deleted {
             return Err(Errors::KeyNotFound);
         }
 
         Ok(log_record.value.into())
     }
+
 
     /// Write to the active file by appending.
     fn append_log_record(&self, log_record: &mut LogRecord) -> Result<LogRecordPos> {

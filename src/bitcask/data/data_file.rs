@@ -8,7 +8,7 @@ use std::{
 
 use crate::bitcask::{
     data::log_record::{max_log_record_header_size, LogRecord, LogRecordType},
-    error::{Errors, Result},
+    errors::{Errors, Result},
     fio::{new_io_manager, IOManager},
 };
 
@@ -19,8 +19,8 @@ pub const RECORD_TYPE_LEN: usize = 1;
 pub const CRC_LEN: usize = 4;
 
 pub struct DataFile {
-    file_id: Arc<RwLock<u32>>,      /* An unique identifier to distinguish data files. */
-    write_ofs: Arc<RwLock<u64>>,    /* Writing offset, preserved for merging. */
+    file_id: Arc<RwLock<u32>>, /* An unique identifier to distinguish data files. */
+    write_ofs: Arc<RwLock<u64>>, /* Writing offset, preserved for merging. */
     io_manager: Box<dyn IOManager>, /* Interface used for data file read and write. */
 }
 
