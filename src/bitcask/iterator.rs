@@ -124,7 +124,6 @@ mod tests {
             })
             .unwrap();
 
-        // delete the testing file.
         std::fs::remove_dir_all(opts.clone().dir_path).expect("failed to remove path");
     }
 
