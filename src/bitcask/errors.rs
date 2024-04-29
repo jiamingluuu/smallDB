@@ -20,4 +20,5 @@ pub enum Errors {
     InvalidLogRecordCRC,
     ReadDataFileEOF,
     ReadDataFileFailed,
+    ExceedMaxBatchNum,
 }

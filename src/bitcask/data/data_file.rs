@@ -18,10 +18,15 @@ pub const INITIAL_FILE_ID: u32 = 1;
 pub const RECORD_TYPE_LEN: usize = 1;
 pub const CRC_LEN: usize = 4;
 
+/// The struct used for storing data file, where
+/// - `file_id` is an unique identifier to for a data file.
+/// - `write_ofs` determines the current offset for writing a log record. When writing a new 
+///     record into the current data file, the encoded record is write at the position `write_ofs`.
+/// - `io_manager` provides the interface for file input and output.
 pub struct DataFile {
-    file_id: Arc<RwLock<u32>>, /* An unique identifier to distinguish data files. */
-    write_ofs: Arc<RwLock<u64>>, /* Writing offset, preserved for merging. */
-    io_manager: Box<dyn IOManager>, /* Interface used for data file read and write. */
+    file_id: Arc<RwLock<u32>>,
+    write_ofs: Arc<RwLock<u64>>,
+    io_manager: Box<dyn IOManager>,
 }
 
 impl DataFile {

@@ -1,10 +1,11 @@
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut, BufMut};
+use prost::{decode_length_delimiter, encode_length_delimiter};
 use log::warn;
 use std::{
     collections::HashMap,
     fs,
     path::PathBuf,
-    sync::{Arc, RwLock},
+    sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex, RwLock},
 };
 
 use crate::bitcask::{
@@ -14,13 +15,24 @@ use crate::bitcask::{
     options::Options,
 };
 
-/// struct used for storage, the running instance of Bitcask
+use super::batch::NON_TRANSACTION_SEQUENCE;
+
+/// struct used for storage, the running instance of Bitcask, where
+/// - `options` is the configuration for the database engine.
+/// - `active_file` indicates the current file that is used for storing all log record.
+/// - `old_files` stores all the closed data file, also called keydir.
+/// - `index` provides an interface for data file indexing.
+/// - `file_ids` collects all the data file id.
+/// - `batch_commit_lock` prevents race conditions while committing transaction.
+/// - `sequence_number` is an unique increasing identifier for transaction.
 pub struct Engine {
-    pub(crate) options: Arc<Options>, // The configuration for the database
-    pub(crate) active_file: Arc<RwLock<DataFile>>, // A file is active only if it is writing by the server.
-    pub(crate) old_files: Arc<RwLock<HashMap<u32, DataFile>>>, // The keydir.
-    pub(crate) index: Box<dyn Indexer>,            // Indexer used for cache.
+    pub(crate) options: Arc<Options>,
+    pub(crate) active_file: Arc<RwLock<DataFile>>,
+    pub(crate) old_files: Arc<RwLock<HashMap<u32, DataFile>>>,
+    pub(crate) index: Box<dyn Indexer>,
     pub(crate) file_ids: Vec<u32>,
+    pub(crate) batch_commit_lock: Mutex<()>,
+    pub(crate) sequence_number: Arc<AtomicUsize>,
 }
 
 impl Engine {
@@ -68,9 +80,14 @@ impl Engine {
             old_files: Arc::new(RwLock::new(old_files)),
             index: Box::new(new_indexer(options.index_type)),
             file_ids,
+            batch_commit_lock: Mutex::new(()),
+            sequence_number: Arc::new(AtomicUsize::new(1)),     // Initialized to 1 to prevent conflict to NON_TRANSACTION_SEQUENCE
         };
 
-        engine.load_index_from_data_files()?;
+        let current_sequence_number = engine.load_index_from_data_files()?;
+        if current_sequence_number > 0 {
+            engine.sequence_number.store(current_sequence_number + 1, Ordering::Relaxed);
+        }
 
         Ok(engine)
     }
@@ -82,7 +99,7 @@ impl Engine {
         }
 
         let mut log_record = LogRecord {
-            key: key.to_vec(),
+            key: encode_log_record_key(key.to_vec(), NON_TRANSACTION_SEQUENCE),
             value: value.to_vec(),
             record_type: LogRecordType::Normal,
         };
@@ -111,7 +128,7 @@ impl Engine {
         }
 
         let mut log_record = LogRecord {
-            key: key.to_vec(),
+            key: encode_log_record_key(key.to_vec(), NON_TRANSACTION_SEQUENCE),
             value: Default::default(),
             record_type: LogRecordType::Deleted,
         };
@@ -122,6 +139,10 @@ impl Engine {
         }
 
         Ok(())
+    }
+    
+    pub fn sync(&self) -> Result<()> {
+        self.active_file.read().unwrap().sync()
     }
 
     /// Get the data with key KEY from the database
@@ -143,9 +164,11 @@ impl Engine {
     }
 
     pub(crate) fn get_value_by_position(&self, log_record_pos: &LogRecordPos) -> Result<Bytes> {
-        // Get the log record by using LOG_RECORD_POS
         let active_file = self.active_file.read().unwrap();
         let old_files = self.old_files.read().unwrap();
+
+        // LOG_RECORD_POS may appears in either active file or closed files, so we need to check 
+        // both of them.
         let log_record = match active_file.get_file_id() == log_record_pos.file_id {
             true => active_file.read_log_record(log_record_pos.ofs)?.0,
             false => {
@@ -167,8 +190,8 @@ impl Engine {
     }
 
 
-    /// Write to the active file by appending.
-    fn append_log_record(&self, log_record: &mut LogRecord) -> Result<LogRecordPos> {
+    /// Write to the active file by appending the file with LOG_RECORD.
+    pub(crate) fn append_log_record(&self, log_record: &mut LogRecord) -> Result<LogRecordPos> {
         let dir_path = self.options.dir_path.clone();
 
         let encoded_record = log_record.encode();
@@ -176,8 +199,8 @@ impl Engine {
 
         let mut active_file = self.active_file.write().unwrap();
 
-        // When the current active file meets a size threshold, close it and
-        // create a new active file.
+        // When the current active file meets a size threshold, close it and create a new active 
+        // file.
         if active_file.get_write_ofs() + record_len > self.options.data_file_size {
             // Persist the current active file to the disk.
             active_file.sync()?;
@@ -207,10 +230,13 @@ impl Engine {
     }
 
     /// Indexing all the data files.
-    fn load_index_from_data_files(&self) -> Result<()> {
+    fn load_index_from_data_files(&self) -> Result<usize> {
+        let mut current_sequence_number = NON_TRANSACTION_SEQUENCE;
         if self.file_ids.is_empty() {
-            return Ok(());
+            return Ok(current_sequence_number);
         }
+
+        let mut transaction_records = HashMap::new();
 
         let active_file = self.active_file.read().unwrap();
         let old_files = self.old_files.read().unwrap();
@@ -227,7 +253,7 @@ impl Engine {
                     }
                 };
 
-                let (log_record, size) = match log_record_res {
+                let (mut log_record, size) = match log_record_res {
                     Ok(result) => result,
                     Err(e) => {
                         if e == Errors::ReadDataFileEOF {
@@ -240,23 +266,38 @@ impl Engine {
                     }
                 };
 
-                // Load LOG_RECORD to cache.
+                // Load LOG_RECORD to memory.
                 let log_record_pos = LogRecordPos {
                     file_id: *file_id,
                     ofs,
                 };
 
-                let ok = match log_record.record_type {
-                    LogRecordType::Normal => {
-                        self.index.put(log_record.key.to_vec(), log_record_pos)
+                let (key, sequence_number) = parse_log_record_key(&log_record.key);
+                if sequence_number == NON_TRANSACTION_SEQUENCE {
+                    self.update_index(key, log_record.record_type, log_record_pos)?;
+                } else {
+                    if log_record.record_type == LogRecordType::TxnFinished {
+                        let records: &Vec<TransactionRecord> = transaction_records
+                            .get(&sequence_number)
+                            .unwrap();
+                        for txn_record in records.iter() {
+                            self.update_index(txn_record.record.key.clone(), txn_record.record.record_type, txn_record.pos)?;
+                        }
+                        transaction_records.remove(&sequence_number);
+                    } else {
+                        log_record.key = key;
+                        transaction_records.entry(sequence_number)
+                            .or_insert(Vec::new())
+                            .push(TransactionRecord {
+                                record: log_record,
+                                pos: log_record_pos,
+                            });
                     }
-                    LogRecordType::Deleted => self.index.delete(log_record.key.to_vec()),
-                };
-
-                if !ok {
-                    return Err(Errors::IndexUpdateFailed);
                 }
-
+                
+                if sequence_number > current_sequence_number {
+                    current_sequence_number = sequence_number;
+                }
                 ofs += size as u64;
             }
 
@@ -265,6 +306,15 @@ impl Engine {
             }
         }
 
+        Ok(current_sequence_number)
+    }
+    
+    fn update_index(&self, key: Vec<u8>, record_type: LogRecordType, log_record_pos: LogRecordPos) -> Result<()> {
+        match record_type {
+            LogRecordType::Normal => self.index.put(key.clone(), log_record_pos),
+            LogRecordType::Deleted => self.index.delete(key.clone()),
+            _ => false,
+        };
         Ok(())
     }
 }
@@ -302,6 +352,22 @@ fn load_data_files(dir_path: PathBuf) -> Result<Vec<DataFile>> {
     Ok(data_files)
 }
 
+/// Append the log record with the sequence number.
+pub(crate) fn encode_log_record_key(key: Vec<u8>, sequence_number: usize) -> Vec<u8> {
+    let mut encoded_key = BytesMut::new();
+    encode_length_delimiter(sequence_number, &mut encoded_key).unwrap();
+    encoded_key.extend_from_slice(&key.to_vec());
+    encoded_key.to_vec()
+}
+
+/// Decode a encoded log record into the original (key, sequence_number) pair.
+pub(crate) fn parse_log_record_key(key: &Vec<u8>) -> (Vec<u8>, usize) {
+    let mut buf = BytesMut::new();
+    buf.put_slice(key);
+    let sequence_number = decode_length_delimiter(&mut buf).unwrap();
+    (buf.to_vec(), sequence_number)
+}
+
 fn check_options(opts: &Options) -> Option<Errors> {
     let dir_path = opts.dir_path.to_str();
     if dir_path.is_none() || dir_path.unwrap().len() == 0 {
@@ -317,7 +383,7 @@ fn check_options(opts: &Options) -> Option<Errors> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use std::path::PathBuf;
 
     use bytes::Bytes;
 

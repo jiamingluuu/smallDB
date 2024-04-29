@@ -1,13 +1,17 @@
 use std::path::PathBuf;
 
-/// The configuration for database.
+/// The configuration for database, where:
+/// - `dir_path` is the location of key directory.
+/// - `data_file_size` determines the threshold for active file size. The active data file is 
+///     closed when if it exceeds this threshold.
+/// - `sync_writes` ensures the data sync persistence on writing if set to TRUE.
+/// - `index_type` determines the indexer used for storage. 
 #[derive(Clone)]
 pub struct Options {
-    pub dir_path: PathBuf, /* The location of keydir */
-    pub data_file_size: u64, /* The threshold for active file size. Close
-                           the current file if exceed this threshold. */
-    pub sync_writes: bool,     /* Synchronize the writing. */
-    pub index_type: IndexType, /* The data structure used for indexer */
+    pub dir_path: PathBuf,
+    pub data_file_size: u64,
+    pub sync_writes: bool,
+    pub index_type: IndexType,
 }
 
 #[derive(Clone)]
@@ -39,6 +43,23 @@ impl Default for IteratorOptions {
         Self {
             prefix: Default::default(),
             reverse: false,
+        }
+    }
+}
+
+/// The configuration for writing, where:
+/// - `max_batch_num` determines the maximum number of write per batch.
+/// - `sync_writes` ensures the data sync persistence on writing if set to TRUE.
+pub struct WriteBatchOptions {
+    pub max_batch_num: usize,
+    pub sync_writes: bool,
+}
+
+impl Default for WriteBatchOptions {
+    fn default() -> Self {
+        Self {
+            max_batch_num: 10000,
+            sync_writes: true,
         }
     }
 }

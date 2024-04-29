@@ -6,3 +6,4 @@ pub mod index;
 pub mod iterator;
 pub mod options;
 pub mod utils;
+pub mod batch;

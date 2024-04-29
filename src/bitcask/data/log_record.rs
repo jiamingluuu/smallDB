@@ -7,6 +7,7 @@ use crate::bitcask::data::data_file::CRC_LEN;
 pub enum LogRecordType {
     Normal,
     Deleted,
+    TxnFinished,
 }
 
 /// On encoding, we formate the struct into the following format:
@@ -19,16 +20,21 @@ pub enum LogRecordType {
 ///                     header
 ///
 /// Remark:
-/// In bitcask's original essay, CRC is at the beginng of a log record. Whereas for convenience,
-/// I put it at the end, which has no effects on the implementation, nor the performace.
+/// In bitcask's original essay, CRC is at the beginning of a log record. Whereas for convenience,
+/// I put it at the end, which has no effects on the implementation, nor the performance.
 #[derive(Debug, PartialEq)]
 pub struct LogRecord {
     pub(crate) key: Vec<u8>,
     pub(crate) value: Vec<u8>,
-    pub(crate) record_type: LogRecordType, /* On deletion, change this attribute to DELTED.
+    pub(crate) record_type: LogRecordType, /* On deletion, change this attribute to DELETED.
                                             * Because we can not change the already written
                                             * records, so an identifier for deletion and writing
                                             * is required. */
+}
+
+pub struct TransactionRecord {
+    pub(crate) record: LogRecord,
+    pub(crate) pos: LogRecordPos,
 }
 
 #[derive(Clone, Copy)]
@@ -84,6 +90,7 @@ impl LogRecordType {
         match v {
             0 => LogRecordType::Normal,
             1 => LogRecordType::Deleted,
+            2 => LogRecordType::TxnFinished,
             _ => panic!("unknown log record type"),
         }
     }

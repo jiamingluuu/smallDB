@@ -69,11 +69,14 @@ impl Indexer for BTree {
     }
 }
 
-/// Iterator for BTree
+/// Iterator for BTree, where:
+/// - `items` stores the key and log record position.
+/// - `curr_index` indicates the position of iterator.
+/// - `options` determines how to iterate through the BTree instance.
 pub struct BTreeIterator {
-    items: Vec<(Vec<u8>, LogRecordPos)>, // Storing the key and log record position
-    curr_index: usize,        // the current position of iterator.
-    options: IteratorOptions, // the config for iterator.
+    items: Vec<(Vec<u8>, LogRecordPos)>,
+    curr_index: usize,
+    options: IteratorOptions,
 }
 
 impl IndexIterator for BTreeIterator {
