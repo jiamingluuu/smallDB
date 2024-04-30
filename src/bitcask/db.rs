@@ -1,11 +1,15 @@
-use bytes::{Bytes, BytesMut, BufMut};
-use prost::{decode_length_delimiter, encode_length_delimiter};
+use bytes::{BufMut, Bytes, BytesMut};
 use log::warn;
+use prost::{decode_length_delimiter, encode_length_delimiter};
 use std::{
     collections::HashMap,
     fs,
     path::PathBuf,
-    sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex, RwLock},
+    str::from_utf8,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex, RwLock,
+    },
 };
 
 use crate::bitcask::{
@@ -15,7 +19,7 @@ use crate::bitcask::{
     options::Options,
 };
 
-use super::batch::NON_TRANSACTION_SEQUENCE;
+use super::{batch::NON_TRANSACTION_SEQUENCE, merge::load_merge_files};
 
 /// struct used for storage, the running instance of Bitcask, where
 /// - `options` is the configuration for the database engine.
@@ -24,7 +28,9 @@ use super::batch::NON_TRANSACTION_SEQUENCE;
 /// - `index` provides an interface for data file indexing.
 /// - `file_ids` collects all the data file id.
 /// - `batch_commit_lock` prevents race conditions while committing transaction.
-/// - `sequence_number` is an unique increasing identifier for transaction.
+/// - `sequence_number` is an unique increasing identifier for transaction. 0 indicates the
+///     current data file is not committed by a transaction.
+/// - `merge_lock` prevents race condition during merge process.
 pub struct Engine {
     pub(crate) options: Arc<Options>,
     pub(crate) active_file: Arc<RwLock<DataFile>>,
@@ -33,6 +39,7 @@ pub struct Engine {
     pub(crate) file_ids: Vec<u32>,
     pub(crate) batch_commit_lock: Mutex<()>,
     pub(crate) sequence_number: Arc<AtomicUsize>,
+    pub(crate) merge_lock: Mutex<()>,
 }
 
 impl Engine {
@@ -51,14 +58,16 @@ impl Engine {
             }
         }
 
+        load_merge_files(&dir_path)?;
+
         let mut data_files = load_data_files(dir_path.clone())?;
         let file_ids: Vec<u32> = data_files
             .iter()
             .map(|data_file| data_file.get_file_id())
             .collect();
 
-        data_files.reverse();
         // The last file is the active file, and the rest are old files.
+        data_files.reverse();
         let mut old_files = HashMap::new();
         if data_files.len() > 1 {
             for _ in 0..=data_files.len() - 2 {
@@ -69,8 +78,8 @@ impl Engine {
 
         let active_file = match data_files.pop() {
             Some(v) => v,
-            // It is possible to have an empty directory, in this case we create a NULL active
-            // file.
+            // It is possible to have an empty directory, an empty active file is created in this
+            // case.
             None => DataFile::new(&dir_path, INITIAL_FILE_ID)?,
         };
 
@@ -81,12 +90,18 @@ impl Engine {
             index: Box::new(new_indexer(options.index_type)),
             file_ids,
             batch_commit_lock: Mutex::new(()),
-            sequence_number: Arc::new(AtomicUsize::new(1)),     // Initialized to 1 to prevent conflict to NON_TRANSACTION_SEQUENCE
+            sequence_number: Arc::new(AtomicUsize::new(1)), // Initialized to 1 to prevent conflict to NON_TRANSACTION_SEQUENCE
+            merge_lock: Mutex::new(()),
         };
+
+        // Load index from hint file to speed up the reboot of bitcask engine after shutdown.
+        engine.load_index_from_hint_file()?;
 
         let current_sequence_number = engine.load_index_from_data_files()?;
         if current_sequence_number > 0 {
-            engine.sequence_number.store(current_sequence_number + 1, Ordering::Relaxed);
+            engine
+                .sequence_number
+                .store(current_sequence_number + 1, Ordering::Relaxed);
         }
 
         Ok(engine)
@@ -115,9 +130,6 @@ impl Engine {
 
     /// Delete the entry with key KEY.
     pub fn delete(&self, key: Bytes) -> Result<()> {
-        // On merging, bitcask will write the newest log record to the disk. Hence, in order to
-        // delete a record, all we need to do is just append the record with an entry that has the
-        // same key but with the tombstone set to DELETED.
         if key.is_empty() {
             return Err(Errors::KeyIsEmpty);
         }
@@ -140,7 +152,7 @@ impl Engine {
 
         Ok(())
     }
-    
+
     pub fn sync(&self) -> Result<()> {
         self.active_file.read().unwrap().sync()
     }
@@ -167,7 +179,7 @@ impl Engine {
         let active_file = self.active_file.read().unwrap();
         let old_files = self.old_files.read().unwrap();
 
-        // LOG_RECORD_POS may appears in either active file or closed files, so we need to check 
+        // LOG_RECORD_POS may appears in either active file or closed files, so we need to check
         // both of them.
         let log_record = match active_file.get_file_id() == log_record_pos.file_id {
             true => active_file.read_log_record(log_record_pos.ofs)?.0,
@@ -176,9 +188,7 @@ impl Engine {
                 if data_file.is_none() {
                     return Err(Errors::DataFileNotFound);
                 }
-                data_file
-                    .unwrap()
-                    .read_log_record(log_record_pos.ofs)?.0
+                data_file.unwrap().read_log_record(log_record_pos.ofs)?.0
             }
         };
 
@@ -189,7 +199,6 @@ impl Engine {
         Ok(log_record.value.into())
     }
 
-
     /// Write to the active file by appending the file with LOG_RECORD.
     pub(crate) fn append_log_record(&self, log_record: &mut LogRecord) -> Result<LogRecordPos> {
         let dir_path = self.options.dir_path.clone();
@@ -199,7 +208,7 @@ impl Engine {
 
         let mut active_file = self.active_file.write().unwrap();
 
-        // When the current active file meets a size threshold, close it and create a new active 
+        // When the current active file meets a size threshold, close it and create a new active
         // file.
         if active_file.get_write_ofs() + record_len > self.options.data_file_size {
             // Persist the current active file to the disk.
@@ -236,13 +245,32 @@ impl Engine {
             return Ok(current_sequence_number);
         }
 
+        // Obtain the id of the file that has not been merged.
+        let mut has_merge = false;
+        let mut non_merge_fid = 0;
+        let merge_fin_file = self.options.dir_path.join(MERGE_FIN_FILE_NAME);
+        if merge_fin_file.is_file() {
+            let merge_fin_file = DataFile::new_merge_fin_file(&self.options.dir_path)?;
+            let merge_fin_record = merge_fin_file.read_log_record(0)?;
+            let v = String::from_utf8(merge_fin_record.0.value).unwrap();
+
+            non_merge_fid = v.parse::<u32>().unwrap();
+            has_merge = true;
+        }
+
         let mut transaction_records = HashMap::new();
 
         let active_file = self.active_file.read().unwrap();
         let old_files = self.old_files.read().unwrap();
 
         for (i, file_id) in self.file_ids.iter().enumerate() {
-            // continuous read the file with id FILE_ID
+            // If the current has FILE_ID that less than NON_MERGE_FID, it indicates the current
+            // file has already been loaded to the indexer via hint file, so we skip it.
+            if has_merge && *file_id < non_merge_fid {
+                continue;
+            }
+
+            // Read the file with id FILE_ID.
             let mut ofs = 0;
             loop {
                 let log_record_res = match *file_id == active_file.get_file_id() {
@@ -277,16 +305,20 @@ impl Engine {
                     self.update_index(key, log_record.record_type, log_record_pos)?;
                 } else {
                     if log_record.record_type == LogRecordType::TxnFinished {
-                        let records: &Vec<TransactionRecord> = transaction_records
-                            .get(&sequence_number)
-                            .unwrap();
+                        let records: &Vec<TransactionRecord> =
+                            transaction_records.get(&sequence_number).unwrap();
                         for txn_record in records.iter() {
-                            self.update_index(txn_record.record.key.clone(), txn_record.record.record_type, txn_record.pos)?;
+                            self.update_index(
+                                txn_record.record.key.clone(),
+                                txn_record.record.record_type,
+                                txn_record.pos,
+                            )?;
                         }
                         transaction_records.remove(&sequence_number);
                     } else {
                         log_record.key = key;
-                        transaction_records.entry(sequence_number)
+                        transaction_records
+                            .entry(sequence_number)
                             .or_insert(Vec::new())
                             .push(TransactionRecord {
                                 record: log_record,
@@ -294,7 +326,7 @@ impl Engine {
                             });
                     }
                 }
-                
+
                 if sequence_number > current_sequence_number {
                     current_sequence_number = sequence_number;
                 }
@@ -308,8 +340,44 @@ impl Engine {
 
         Ok(current_sequence_number)
     }
-    
-    fn update_index(&self, key: Vec<u8>, record_type: LogRecordType, log_record_pos: LogRecordPos) -> Result<()> {
+
+    pub(crate) fn load_index_from_hint_file(&self) -> Result<()> {
+        let hint_file_name = self.options.dir_path.join(HINT_FILE_NAME);
+
+        // Return if hint file does not exist.
+        if !hint_file_name.is_file() {
+            return Ok(());
+        }
+
+        // Load all log records from hint file to the indexer.
+        let hint_file = DataFile::new_hint_file(&hint_file_name)?;
+        let mut ofs = 0;
+        loop {
+            let (log_record, size) = match hint_file.read_log_record(ofs) {
+                Ok(result) => result,
+                Err(e) => {
+                    if e == Errors::ReadDataFileEOF {
+                        // This case indicates all content within the current file has been
+                        // read. Therefore, we break the current loop and read the next file.
+                        break;
+                    } else {
+                        return Err(e);
+                    }
+                }
+            };
+            let log_record_pos = decode_log_record_pos(log_record.value);
+            self.index.put(log_record.key, log_record_pos);
+            ofs += size as u64;
+        }
+        Ok(())
+    }
+
+    fn update_index(
+        &self,
+        key: Vec<u8>,
+        record_type: LogRecordType,
+        log_record_pos: LogRecordPos,
+    ) -> Result<()> {
         match record_type {
             LogRecordType::Normal => self.index.put(key.clone(), log_record_pos),
             LogRecordType::Deleted => self.index.delete(key.clone()),
@@ -360,7 +428,7 @@ pub(crate) fn encode_log_record_key(key: Vec<u8>, sequence_number: usize) -> Vec
     encoded_key.to_vec()
 }
 
-/// Decode a encoded log record into the original (key, sequence_number) pair.
+/// Decode a encoded log record into the (key, sequence_number) pair.
 pub(crate) fn parse_log_record_key(key: &Vec<u8>) -> (Vec<u8>, usize) {
     let mut buf = BytesMut::new();
     buf.put_slice(key);

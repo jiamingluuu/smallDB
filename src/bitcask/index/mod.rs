@@ -5,9 +5,8 @@ use bytes::Bytes;
 use crate::bitcask::{
     data::log_record::LogRecordPos,
     errors::Result,
-    options::{IteratorOptions, IndexType},
+    options::{IndexType, IteratorOptions},
 };
-
 
 /// Interface for data indexing abstraction.
 pub trait Indexer: Sync + Send {
@@ -19,7 +18,7 @@ pub trait Indexer: Sync + Send {
 
     /// Delete the index associate with key KEY in the INDEXER.
     fn delete(&self, key: Vec<u8>) -> bool;
-    
+
     /// Get all keys contained in the engine.
     fn list_keys(&self) -> Result<Vec<Bytes>>;
 

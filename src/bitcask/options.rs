@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 /// The configuration for database, where:
 /// - `dir_path` is the location of key directory.
-/// - `data_file_size` determines the threshold for active file size. The active data file is 
+/// - `data_file_size` determines the threshold for active file size. The active data file is
 ///     closed when if it exceeds this threshold.
 /// - `sync_writes` ensures the data sync persistence on writing if set to TRUE.
-/// - `index_type` determines the indexer used for storage. 
+/// - `index_type` determines the indexer used for storage.
 #[derive(Clone)]
 pub struct Options {
     pub dir_path: PathBuf,

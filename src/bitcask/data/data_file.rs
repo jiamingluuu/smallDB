@@ -12,15 +12,20 @@ use crate::bitcask::{
     fio::{new_io_manager, IOManager},
 };
 
+use super::log_record::LogRecordPos;
+
 /// Convention: All bitcask data files are end with .DATA.
 pub const DATA_FILE_NAME_SUFFIX: &str = ".data";
+pub const HINT_FILE_NAME: &str = "hint-index";
+pub const MERGE_FIN_FILE_NAME: &str = "merge-finished";
+
 pub const INITIAL_FILE_ID: u32 = 1;
 pub const RECORD_TYPE_LEN: usize = 1;
 pub const CRC_LEN: usize = 4;
 
 /// The struct used for storing data file, where
 /// - `file_id` is an unique identifier to for a data file.
-/// - `write_ofs` determines the current offset for writing a log record. When writing a new 
+/// - `write_ofs` determines the current offset for writing a log record. When writing a new
 ///     record into the current data file, the encoded record is write at the position `write_ofs`.
 /// - `io_manager` provides the interface for file input and output.
 pub struct DataFile {
@@ -36,6 +41,26 @@ impl DataFile {
         let io_manager = new_io_manager(file_name)?;
         Ok(DataFile {
             file_id: Arc::new(RwLock::new(file_id)),
+            write_ofs: Arc::new(RwLock::new(0)),
+            io_manager: Box::new(io_manager),
+        })
+    }
+
+    pub fn new_hint_file(dir_path: &PathBuf) -> Result<DataFile> {
+        let file_name = dir_path.join(HINT_FILE_NAME);
+        let io_manager = new_io_manager(file_name)?;
+        Ok(DataFile {
+            file_id: Arc::new(RwLock::new(0)),
+            write_ofs: Arc::new(RwLock::new(0)),
+            io_manager: Box::new(io_manager),
+        })
+    }
+
+    pub fn new_merge_fin_file(dir_path: &PathBuf) -> Result<DataFile> {
+        let file_name = dir_path.join(MERGE_FIN_FILE_NAME);
+        let io_manager = new_io_manager(file_name)?;
+        Ok(DataFile {
+            file_id: Arc::new(RwLock::new(0)),
             write_ofs: Arc::new(RwLock::new(0)),
             io_manager: Box::new(io_manager),
         })
@@ -98,6 +123,18 @@ impl DataFile {
         let size = self.io_manager.write(buf)?;
         *self.write_ofs.write().unwrap() += size as u64;
         Ok(size)
+    }
+
+    /// Write a hint file next to the given data file.
+    pub fn write_hint_record(&self, key: Vec<u8>, pos: LogRecordPos) -> Result<()> {
+        let hint_record = LogRecord {
+            key,
+            value: pos.encode(),
+            record_type: LogRecordType::Normal,
+        };
+        let encoded_record = hint_record.encode();
+        self.write(&encoded_record)?;
+        Ok(())
     }
 
     pub fn sync(&self) -> Result<()> {

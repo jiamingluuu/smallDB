@@ -1,5 +1,9 @@
 use bytes::{BufMut, BytesMut};
-use prost::{encode_length_delimiter, length_delimiter_len};
+use prost::{
+    encode_length_delimiter,
+    encoding::{decode_varint, encode_varint},
+    length_delimiter_len,
+};
 
 use crate::bitcask::data::data_file::CRC_LEN;
 
@@ -11,14 +15,14 @@ pub enum LogRecordType {
 }
 
 /// On encoding, we formate the struct into the following format:
+/// ```
+///  +------+----------+------------+----------+-------------------------+-----+
+///  | Type | key_size | value_size |    key   |         value           | CRC |
+///  +------+----------+------------+----------+-------------------------+-----+
 ///
-///        +------+----------+------------+----------+-------------------------+-----+
-///        | Type | key_size | value_size |    key   |         value           | CRC |
-///        +------+----------+------------+----------+-------------------------+-----+
-///
-///        |------------------------------|
-///                     header
-///
+///  |------------------------------|
+///               header
+/// ```
 /// Remark:
 /// In bitcask's original essay, CRC is at the beginning of a log record. Whereas for convenience,
 /// I put it at the end, which has no effects on the implementation, nor the performance.
@@ -93,6 +97,32 @@ impl LogRecordType {
             2 => LogRecordType::TxnFinished,
             _ => panic!("unknown log record type"),
         }
+    }
+}
+
+impl LogRecordPos {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut buf = BytesMut::new();
+        encode_varint(self.file_id as u64, &mut buf);
+        encode_varint(self.ofs, &mut buf);
+        buf.to_vec()
+    }
+}
+
+pub fn decode_log_record_pos(pos: Vec<u8>) -> LogRecordPos {
+    let mut buf = BytesMut::new();
+    buf.put_slice(&pos);
+    let fid = match decode_varint(&mut buf) {
+        Ok(fid) => fid,
+        Err(e) => panic!("decode log record pos Error: {}", e),
+    };
+    let ofs = match decode_varint(&mut buf) {
+        Ok(ofs) => ofs,
+        Err(e) => panic!("decode log record pos Error: {}", e),
+    };
+    LogRecordPos {
+        file_id: fid as u32,
+        ofs,
     }
 }
 
