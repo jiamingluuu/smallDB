@@ -2,24 +2,25 @@ use bytes::{BufMut, Bytes, BytesMut};
 use log::warn;
 use prost::{decode_length_delimiter, encode_length_delimiter};
 use std::{
-    collections::HashMap,
-    fs,
-    path::PathBuf,
-    str::from_utf8,
-    sync::{
+    collections::HashMap, fs, path::PathBuf, sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex, RwLock,
-    },
+    }
 };
 
-use crate::bitcask::{
+use super::{
     data::{data_file::*, log_record::*},
     errors::{Errors, Result},
     index::{new_indexer, Indexer},
     options::Options,
+    batch::NON_TRANSACTION_SEQUENCE, 
+    merge::load_merge_files, 
+    options::IndexType,
 };
 
-use super::{batch::NON_TRANSACTION_SEQUENCE, merge::load_merge_files};
+
+const INITIAL_FILE_ID: u32 = 1;
+const SEQUENCE_NUMBER_KEY: &str = "seq-no";
 
 /// struct used for storage, the running instance of Bitcask, where
 /// - `options` is the configuration for the database engine.
@@ -40,6 +41,8 @@ pub struct Engine {
     pub(crate) batch_commit_lock: Mutex<()>,
     pub(crate) sequence_number: Arc<AtomicUsize>,
     pub(crate) merge_lock: Mutex<()>,
+    pub(crate) sequence_file_exists: bool,
+    pub(crate) is_first_time_init: bool,
 }
 
 impl Engine {
@@ -49,18 +52,24 @@ impl Engine {
             return Err(e);
         }
 
+        let mut is_first_time_init = false;
         let options = opts.clone();
         let dir_path = opts.dir_path.clone();
         if !dir_path.is_dir() {
+            is_first_time_init = true;
             if let Err(e) = fs::create_dir_all(dir_path.clone()) {
                 warn!("create database directory error {}", e);
                 return Err(Errors::FailedToSyncToDataFile);
             }
         }
+        let entries = fs::read_dir(&dir_path).unwrap();
+        if entries.count() == 0 {
+            is_first_time_init = true;
+        }
 
         load_merge_files(&dir_path)?;
 
-        let mut data_files = load_data_files(dir_path.clone())?;
+        let mut data_files = load_data_files(&dir_path)?;
         let file_ids: Vec<u32> = data_files
             .iter()
             .map(|data_file| data_file.get_file_id())
@@ -83,28 +92,57 @@ impl Engine {
             None => DataFile::new(&dir_path, INITIAL_FILE_ID)?,
         };
 
-        let engine = Self {
+        let mut engine = Self {
             options: Arc::new(opts),
             active_file: Arc::new(RwLock::new(active_file)),
             old_files: Arc::new(RwLock::new(old_files)),
-            index: Box::new(new_indexer(options.index_type)),
+            index: new_indexer(options.index_type, options.dir_path),
             file_ids,
             batch_commit_lock: Mutex::new(()),
             sequence_number: Arc::new(AtomicUsize::new(1)), // Initialized to 1 to prevent conflict to NON_TRANSACTION_SEQUENCE
             merge_lock: Mutex::new(()),
+            sequence_file_exists: false,
+            is_first_time_init,
         };
 
-        // Load index from hint file to speed up the reboot of bitcask engine after shutdown.
-        engine.load_index_from_hint_file()?;
+        match engine.options.index_type {
+            IndexType::BTree | IndexType::SkipList => {
+                // Load index from hint file to speed up the reboot of bitcask engine after shutdown.
+                engine.load_index_from_hint_file()?;
 
-        let current_sequence_number = engine.load_index_from_data_files()?;
-        if current_sequence_number > 0 {
-            engine
-                .sequence_number
-                .store(current_sequence_number + 1, Ordering::Relaxed);
+                let current_sequence_number = engine.load_index_from_data_files()?;
+                if current_sequence_number > 0 {
+                    engine
+                        .sequence_number
+                        .store(current_sequence_number + 1, Ordering::Relaxed);
+                }
+            }
+            IndexType::BPTree => {
+                let (exists, sequence_number) = engine.load_sequence_number();
+                engine.sequence_number.store(sequence_number, Ordering::SeqCst);
+                engine.sequence_file_exists = exists;
+                
+                // Set the offset of current active file
+                let active_file = engine.active_file.write().unwrap();
+                active_file.set_write_ofs(active_file.file_size());
+            }
         }
 
         Ok(engine)
+    }
+    
+    pub fn close(&self) -> Result<()> {
+        let sequence_number_file = DataFile::new_sequence_number_file(&self.options.dir_path)?;
+        let sequence_number = self.sequence_number.load(Ordering::SeqCst);
+        let record = LogRecord {
+            key: SEQUENCE_NUMBER_KEY.as_bytes().to_vec(),
+            value: sequence_number.to_string().into_bytes(),
+            record_type: LogRecordType::Normal,
+        };
+        sequence_number_file.write(&record.encode())?;
+        sequence_number_file.sync()?;
+
+        self.active_file.read().unwrap().sync()
     }
 
     /// Write the pair (KEY, VALUE) into the database
@@ -372,6 +410,25 @@ impl Engine {
         Ok(())
     }
 
+    fn load_sequence_number(&self) -> (bool, usize) {
+        let file_name = self.options.dir_path.join(SEQUENCE_NUMBER_FILE_NAME);
+        if !file_name.is_file() {
+            return (false, 0)
+        }
+        let sequence_number_file = DataFile::new_sequence_number_file(&self.options.dir_path).unwrap();
+        let record = match sequence_number_file.read_log_record(0) {
+            Ok(res) => res.0,
+            Err(e) => panic!("failed to read sequence number: {:?}", e),
+        };
+        let v = String::from_utf8(record.value).unwrap();
+        let sequence_number = v.parse::<usize>().unwrap();
+        
+        // Clean up after loading.
+        fs::remove_file(file_name).unwrap();
+
+        (true, sequence_number)
+    }
+
     fn update_index(
         &self,
         key: Vec<u8>,
@@ -387,9 +444,17 @@ impl Engine {
     }
 }
 
+impl Drop for Engine {
+    fn drop(&mut self) {
+        if let Err(e) = self.close() {
+            log::error!("error while closing engine: {:?}", e);
+        }
+    }
+}
+
 /// Fetch all data files under directory DIR_PATH.
-fn load_data_files(dir_path: PathBuf) -> Result<Vec<DataFile>> {
-    let dir = fs::read_dir(dir_path.clone());
+fn load_data_files(dir_path: &PathBuf) -> Result<Vec<DataFile>> {
+    let dir = fs::read_dir(dir_path);
     if dir.is_err() {
         return Err(Errors::FailedToReadDatabaseDir);
     }
@@ -570,7 +635,7 @@ mod tests {
         assert_eq!(Errors::KeyNotFound, res9.err().unwrap());
 
         // read from old data file
-        for i in 500..=100000 {
+        for i in 0..=100000 {
             let res = engine.put(get_test_key(i), get_test_value(i));
             assert!(res.is_ok());
         }

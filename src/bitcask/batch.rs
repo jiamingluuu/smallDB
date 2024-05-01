@@ -1,6 +1,6 @@
 //! A transaction is a group of database operations that is either
-//! - successfully update database state, or
-//! - failed so the database rolls back to the original state before transaction begins.
+//! - successes, so the database state is updated, or
+//! - failed, so the database rolls back to the original state priori to the transaction.
 //!
 //! A transaction needs to satisfy ACID principle, that is:
 //! - Atomicity: Each transaction is treated as a single "unit".
@@ -29,10 +29,10 @@ use std::{
 use bytes::Bytes;
 
 use super::{
-    data::log_record::{LogRecord, LogRecordType},
-    db::{encode_log_record_key, Engine},
-    errors::{Errors, Result},
-    options::WriteBatchOptions,
+    data::log_record::{LogRecord, LogRecordType}, 
+    db::{encode_log_record_key, Engine}, 
+    errors::{Errors, Result}, 
+    options::{IndexType, WriteBatchOptions},
 };
 
 const TXN_FIN_KEY: &[u8] = "txn-fin".as_bytes();
@@ -51,6 +51,10 @@ pub struct WriteBatch<'a> {
 
 impl Engine {
     pub fn new_write_batch(&self, options: WriteBatchOptions) -> Result<WriteBatch> {
+        if self.options.index_type == IndexType::BPTree && !self.sequence_file_exists && !self.is_first_time_init {
+            return Err(Errors::UnableToUseWriteBatch);
+        }
+
         Ok(WriteBatch {
             pending_writes: Arc::new(Mutex::new(HashMap::new())),
             engine: self,

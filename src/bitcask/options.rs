@@ -14,7 +14,7 @@ pub struct Options {
     pub index_type: IndexType,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum IndexType {
     BPTree,
     BTree,

@@ -54,7 +54,7 @@ impl Indexer for BTree {
     fn iterator(&self, options: IteratorOptions) -> Box<dyn IndexIterator> {
         let read_guard = self.tree.read().unwrap();
         let mut items = Vec::with_capacity(read_guard.len());
-        // 将 BTree 中的数据存储到数组中
+
         for (key, value) in read_guard.iter() {
             items.push((key.clone(), value.clone()));
         }

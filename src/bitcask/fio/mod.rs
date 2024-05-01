@@ -14,8 +14,11 @@ pub trait IOManager: Sync + Send {
     /// Write to file SELF with content in BUF.
     fn write(&self, buf: &[u8]) -> Result<usize>;
 
-    /// Persist data
+    /// Synchronize data.
     fn sync(&self) -> Result<()>;
+    
+    /// Get the size of current data file.
+    fn size(&self) -> u64;
 }
 
 /// Initialize IOMANAGER according to the file type.

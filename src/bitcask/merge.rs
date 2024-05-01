@@ -12,7 +12,7 @@ use std::{fs, path::PathBuf};
 use super::{
     batch::NON_TRANSACTION_SEQUENCE,
     data::{
-        data_file::{get_data_file_name, DataFile, MERGE_FIN_FILE_NAME},
+        data_file::{get_data_file_name, DataFile, MERGE_FIN_FILE_NAME, SEQUENCE_NUMBER_FILE_NAME},
         log_record::{LogRecord, LogRecordType},
     },
     db::{encode_log_record_key, parse_log_record_key, Engine},
@@ -46,7 +46,7 @@ impl Engine {
         merge_engine_opts.data_file_size = self.options.data_file_size;
         let merge_engine = Engine::open(merge_engine_opts)?;
 
-        // Creates the hint file.
+        // Create the hint file.
         let hint_file = DataFile::new_hint_file(&merge_path)?;
         for data_file in &merge_files {
             let mut ofs = 0;
@@ -156,11 +156,19 @@ pub(crate) fn load_merge_files(dir_path: &PathBuf) -> Result<()> {
             if file_name.ends_with(MERGE_FIN_FILE_NAME) {
                 merge_finished = true;
             }
+            // Ignore the file indicates the sequence number. It is possible to have a new 
+            // transaction happens during the merge process, so the old sequence number file
+            // is outdated.
+            if file_name.ends_with(SEQUENCE_NUMBER_FILE_NAME) {
+                continue;
+            }
             merge_file_names.push(entry.file_name());
         }
     }
 
-    // If the merge does not completed, return.
+    // Merge-fin file does not exist indicates merge process is not completed due to a undesired
+    // behavior, for instance, system shutdown. So we deletes the whole merge directory to
+    // discard the merge process.
     if !merge_finished {
         fs::remove_dir_all(merge_path.clone()).unwrap();
         return Ok(());

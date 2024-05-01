@@ -17,9 +17,9 @@ use super::log_record::LogRecordPos;
 /// Convention: All bitcask data files are end with .DATA.
 pub const DATA_FILE_NAME_SUFFIX: &str = ".data";
 pub const HINT_FILE_NAME: &str = "hint-index";
+pub const SEQUENCE_NUMBER_FILE_NAME: &str = "seq-no";
 pub const MERGE_FIN_FILE_NAME: &str = "merge-finished";
 
-pub const INITIAL_FILE_ID: u32 = 1;
 pub const RECORD_TYPE_LEN: usize = 1;
 pub const CRC_LEN: usize = 4;
 
@@ -64,6 +64,20 @@ impl DataFile {
             write_ofs: Arc::new(RwLock::new(0)),
             io_manager: Box::new(io_manager),
         })
+    }
+
+    pub fn new_sequence_number_file(dir_path: &PathBuf) -> Result<DataFile> {
+        let file_name = dir_path.join(SEQUENCE_NUMBER_FILE_NAME);
+        let io_manager = new_io_manager(file_name)?;
+        Ok(DataFile {
+            file_id: Arc::new(RwLock::new(0)),
+            write_ofs: Arc::new(RwLock::new(0)),
+            io_manager: Box::new(io_manager),
+        })
+    }
+    
+    pub fn file_size(&self) -> u64 {
+        self.io_manager.size()
     }
 
     pub fn get_write_ofs(&self) -> u64 {

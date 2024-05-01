@@ -41,6 +41,9 @@ pub struct TransactionRecord {
     pub(crate) pos: LogRecordPos,
 }
 
+/// struct used for log record lookup within a data file, where:
+/// - `file_id` is a id of the data file.
+/// - `ofs` indicates the position of log record to be looked up.
 #[derive(Clone, Copy)]
 pub struct LogRecordPos {
     pub(crate) file_id: u32,

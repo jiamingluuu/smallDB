@@ -22,4 +22,5 @@ pub enum Errors {
     ReadDataFileFailed,
     ExceedMaxBatchNum,
     MergeInProgress,
+    UnableToUseWriteBatch, 
 }
