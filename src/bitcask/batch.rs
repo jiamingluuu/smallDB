@@ -29,9 +29,9 @@ use std::{
 use bytes::Bytes;
 
 use super::{
-    data::log_record::{LogRecord, LogRecordType}, 
-    db::{encode_log_record_key, Engine}, 
-    errors::{Errors, Result}, 
+    data::log_record::{LogRecord, LogRecordType},
+    db::{encode_log_record_key, Engine},
+    errors::{Errors, Result},
     options::{IndexType, WriteBatchOptions},
 };
 
@@ -51,7 +51,10 @@ pub struct WriteBatch<'a> {
 
 impl Engine {
     pub fn new_write_batch(&self, options: WriteBatchOptions) -> Result<WriteBatch> {
-        if self.options.index_type == IndexType::BPTree && !self.sequence_file_exists && !self.is_first_time_init {
+        if self.options.index_type == IndexType::BPTree
+            && !self.sequence_file_exists
+            && !self.is_first_time_init
+        {
             return Err(Errors::UnableToUseWriteBatch);
         }
 
@@ -237,8 +240,8 @@ mod tests {
         let commit_res2 = wb.commit();
         assert!(commit_res2.is_ok());
 
-        // engine.close().expect("failed to close");
-        // std::mem::drop(engine);
+        engine.close().expect("failed to close");
+        std::mem::drop(engine);
 
         let engine2 = Engine::open(opts.clone()).expect("failed to open engine");
         let keys = engine2.list_keys();

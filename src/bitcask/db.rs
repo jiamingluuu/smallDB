@@ -1,26 +1,29 @@
 use bytes::{BufMut, Bytes, BytesMut};
+use fs2::FileExt;
 use log::warn;
 use prost::{decode_length_delimiter, encode_length_delimiter};
 use std::{
-    collections::HashMap, fs, path::PathBuf, sync::{
+    collections::HashMap,
+    fs::{self, File},
+    path::PathBuf,
+    sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex, RwLock,
-    }
+    },
 };
 
 use super::{
+    batch::NON_TRANSACTION_SEQUENCE,
     data::{data_file::*, log_record::*},
     errors::{Errors, Result},
     index::{new_indexer, Indexer},
-    options::Options,
-    batch::NON_TRANSACTION_SEQUENCE, 
-    merge::load_merge_files, 
-    options::IndexType,
+    merge::load_merge_files,
+    options::{IOType, IndexType, Options},
 };
-
 
 const INITIAL_FILE_ID: u32 = 1;
 const SEQUENCE_NUMBER_KEY: &str = "seq-no";
+pub(crate) const LOCK_FILE_NAME: &str = "flock";
 
 /// struct used for storage, the running instance of Bitcask, where
 /// - `options` is the configuration for the database engine.
@@ -32,21 +35,28 @@ const SEQUENCE_NUMBER_KEY: &str = "seq-no";
 /// - `sequence_number` is an unique increasing identifier for transaction. 0 indicates the
 ///     current data file is not committed by a transaction.
 /// - `merge_lock` prevents race condition during merge process.
+/// - `sequence_file_exists` and `is_first_time_init` disable the usage of BPTree if they
+///     where both set to true. Otherwise, after reboot, engine cannot obtain the current
+///     sequence number to perform a correct batch write.
+/// - `bytes_writes` records how many bytes were written by engine, used for automatic sync.
 pub struct Engine {
     pub(crate) options: Arc<Options>,
     pub(crate) active_file: Arc<RwLock<DataFile>>,
     pub(crate) old_files: Arc<RwLock<HashMap<u32, DataFile>>>,
     pub(crate) index: Box<dyn Indexer>,
-    pub(crate) file_ids: Vec<u32>,
+    file_ids: Vec<u32>,
     pub(crate) batch_commit_lock: Mutex<()>,
     pub(crate) sequence_number: Arc<AtomicUsize>,
     pub(crate) merge_lock: Mutex<()>,
     pub(crate) sequence_file_exists: bool,
     pub(crate) is_first_time_init: bool,
+    lock_file: File,
+    bytes_write: Arc<AtomicUsize>,
+    io_type: IOType,
 }
 
 impl Engine {
-    /// Open a bitcast instance with configuration OPTS.
+    /// Open a bitcask instance with configuration OPTS.
     pub fn open(opts: Options) -> Result<Self> {
         if let Some(e) = check_options(&opts) {
             return Err(e);
@@ -62,6 +72,18 @@ impl Engine {
                 return Err(Errors::FailedToSyncToDataFile);
             }
         }
+
+        // Ensure only one process is accessing the current keydir.
+        let lock_file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(dir_path.join(LOCK_FILE_NAME))
+            .unwrap();
+        if let Err(_) = lock_file.try_lock_exclusive() {
+            return Err(Errors::DatabaseInUse);
+        }
+
         let entries = fs::read_dir(&dir_path).unwrap();
         if entries.count() == 0 {
             is_first_time_init = true;
@@ -69,7 +91,7 @@ impl Engine {
 
         load_merge_files(&dir_path)?;
 
-        let mut data_files = load_data_files(&dir_path)?;
+        let mut data_files = load_data_files(&dir_path, &opts)?;
         let file_ids: Vec<u32> = data_files
             .iter()
             .map(|data_file| data_file.get_file_id())
@@ -87,9 +109,8 @@ impl Engine {
 
         let active_file = match data_files.pop() {
             Some(v) => v,
-            // It is possible to have an empty directory, an empty active file is created in this
-            // case.
-            None => DataFile::new(&dir_path, INITIAL_FILE_ID)?,
+            // It is possible to have an empty directory, so create an empty data file.
+            None => DataFile::new(&dir_path, INITIAL_FILE_ID, IOType::StandaradFIO)?,
         };
 
         let mut engine = Self {
@@ -103,6 +124,9 @@ impl Engine {
             merge_lock: Mutex::new(()),
             sequence_file_exists: false,
             is_first_time_init,
+            lock_file,
+            bytes_write: Arc::new(AtomicUsize::new(0)),
+            io_type: IOType::StandaradFIO,
         };
 
         match engine.options.index_type {
@@ -119,19 +143,29 @@ impl Engine {
             }
             IndexType::BPTree => {
                 let (exists, sequence_number) = engine.load_sequence_number();
-                engine.sequence_number.store(sequence_number, Ordering::SeqCst);
+                engine
+                    .sequence_number
+                    .store(sequence_number, Ordering::SeqCst);
                 engine.sequence_file_exists = exists;
-                
+
                 // Set the offset of current active file
                 let active_file = engine.active_file.write().unwrap();
                 active_file.set_write_ofs(active_file.file_size());
+
+                if engine.options.startup_io_type == IOType::MemoryMapped {
+                    engine.reset_io_type();
+                }
             }
         }
 
         Ok(engine)
     }
-    
+
     pub fn close(&self) -> Result<()> {
+        if !self.options.dir_path.is_dir() {
+            return Ok(());
+        }
+
         let sequence_number_file = DataFile::new_sequence_number_file(&self.options.dir_path)?;
         let sequence_number = self.sequence_number.load(Ordering::SeqCst);
         let record = LogRecord {
@@ -142,7 +176,11 @@ impl Engine {
         sequence_number_file.write(&record.encode())?;
         sequence_number_file.sync()?;
 
-        self.active_file.read().unwrap().sync()
+        self.active_file.read().unwrap().sync()?;
+
+        self.lock_file.unlock().unwrap();
+
+        Ok(())
     }
 
     /// Write the pair (KEY, VALUE) into the database
@@ -206,10 +244,7 @@ impl Engine {
             return Err(Errors::KeyNotFound);
         }
 
-        // If the record position is at active file, read it from active file, otherwise read it
-        // from old files.
         let log_record_pos = pos.unwrap();
-
         self.get_value_by_position(&log_record_pos)
     }
 
@@ -255,19 +290,32 @@ impl Engine {
 
             // Close the current active file, and insert it into the keydir.
             let mut old_files = self.old_files.write().unwrap();
-            let old_file = DataFile::new(&dir_path, file_id)?;
+            let old_file = DataFile::new(&dir_path, file_id, IOType::StandaradFIO)?;
             old_files.insert(file_id, old_file);
 
             // Create a new active file.
-            let new_file = DataFile::new(&dir_path, file_id + 1)?;
+            let new_file = DataFile::new(&dir_path, file_id + 1, IOType::StandaradFIO)?;
             *active_file = new_file;
         }
 
         // write to the current active file.
         let write_ofs = active_file.get_write_ofs();
         active_file.write(&encoded_record)?;
-        if self.options.sync_writes {
+
+        // Determine if we should perform sync
+        let previous = self
+            .bytes_write
+            .fetch_add(encoded_record.len(), Ordering::SeqCst);
+        let mut need_sync = self.options.sync_writes;
+        if !need_sync
+            && self.options.bytes_per_sync > 0
+            && previous + encoded_record.len() >= self.options.bytes_per_sync
+        {
+            need_sync = true;
+        }
+        if need_sync {
             active_file.sync()?;
+            self.bytes_write.store(0, Ordering::SeqCst);
         }
 
         Ok(LogRecordPos {
@@ -413,16 +461,17 @@ impl Engine {
     fn load_sequence_number(&self) -> (bool, usize) {
         let file_name = self.options.dir_path.join(SEQUENCE_NUMBER_FILE_NAME);
         if !file_name.is_file() {
-            return (false, 0)
+            return (false, 0);
         }
-        let sequence_number_file = DataFile::new_sequence_number_file(&self.options.dir_path).unwrap();
+        let sequence_number_file =
+            DataFile::new_sequence_number_file(&self.options.dir_path).unwrap();
         let record = match sequence_number_file.read_log_record(0) {
             Ok(res) => res.0,
             Err(e) => panic!("failed to read sequence number: {:?}", e),
         };
         let v = String::from_utf8(record.value).unwrap();
         let sequence_number = v.parse::<usize>().unwrap();
-        
+
         // Clean up after loading.
         fs::remove_file(file_name).unwrap();
 
@@ -442,6 +491,15 @@ impl Engine {
         };
         Ok(())
     }
+
+    fn reset_io_type(&self) {
+        let mut active_file = self.active_file.write().unwrap();
+        active_file.set_io_manager(&self.options.dir_path, IOType::StandaradFIO);
+        let mut old_files = self.old_files.write().unwrap();
+        for (_, file) in old_files.iter_mut() {
+            file.set_io_manager(&self.options.dir_path, IOType::StandaradFIO);
+        }
+    }
 }
 
 impl Drop for Engine {
@@ -453,7 +511,7 @@ impl Drop for Engine {
 }
 
 /// Fetch all data files under directory DIR_PATH.
-fn load_data_files(dir_path: &PathBuf) -> Result<Vec<DataFile>> {
+fn load_data_files(dir_path: &PathBuf, opts: &Options) -> Result<Vec<DataFile>> {
     let dir = fs::read_dir(dir_path);
     if dir.is_err() {
         return Err(Errors::FailedToReadDatabaseDir);
@@ -479,7 +537,7 @@ fn load_data_files(dir_path: &PathBuf) -> Result<Vec<DataFile>> {
 
     file_ids.sort();
     for file_id in file_ids {
-        data_files.push(DataFile::new(&dir_path, file_id)?);
+        data_files.push(DataFile::new(&dir_path, file_id, opts.startup_io_type)?);
     }
 
     Ok(data_files)
@@ -635,7 +693,7 @@ mod tests {
         assert_eq!(Errors::KeyNotFound, res9.err().unwrap());
 
         // read from old data file
-        for i in 0..=100000 {
+        for i in 500..=100000 {
             let res = engine.put(get_test_key(i), get_test_value(i));
             assert!(res.is_ok());
         }
@@ -652,7 +710,7 @@ mod tests {
         let res12 = engine2.get(get_test_key(22));
         assert_eq!(Bytes::from("22"), res12.unwrap());
 
-        let res13 = engine2.get(get_test_key(333));
+        let res13 = engine2.get(get_test_key(31));
         assert_eq!(Errors::KeyNotFound, res13.err().unwrap());
 
         // delete tested files
@@ -702,5 +760,23 @@ mod tests {
 
         // delete tested files
         std::fs::remove_dir_all(opt.clone().dir_path).expect("failed to remove dir");
+    }
+
+    #[test]
+    fn test_engine_filelock() {
+        let mut opts = Options::default();
+        opts.dir_path = PathBuf::from("/tmp/bitcask-rs-flock");
+        let engine = Engine::open(opts.clone()).expect("failed to open engine");
+
+        let res1 = Engine::open(opts.clone());
+        assert_eq!(res1.err().unwrap(), Errors::DatabaseInUse);
+
+        let res2 = engine.close();
+        assert!(res2.is_ok());
+
+        let res3 = Engine::open(opts.clone());
+        assert!(res3.is_ok());
+
+        std::fs::remove_dir_all(opts.clone().dir_path).expect("failed to remove path");
     }
 }

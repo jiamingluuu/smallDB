@@ -4,14 +4,17 @@ use std::path::PathBuf;
 /// - `dir_path` is the location of key directory.
 /// - `data_file_size` determines the threshold for active file size. The active data file is
 ///     closed when if it exceeds this threshold.
+/// - `bytes_per_sync` determines when should we perform a synchronization of data.
 /// - `sync_writes` ensures the data sync persistence on writing if set to TRUE.
 /// - `index_type` determines the indexer used for storage.
 #[derive(Clone)]
 pub struct Options {
     pub dir_path: PathBuf,
     pub data_file_size: u64,
+    pub bytes_per_sync: usize,
     pub sync_writes: bool,
     pub index_type: IndexType,
+    pub startup_io_type: IOType,
 }
 
 #[derive(Clone, PartialEq)]
@@ -26,8 +29,10 @@ impl Default for Options {
         Self {
             dir_path: std::env::temp_dir().join("bitcask-data"),
             data_file_size: 256 * 1024 * 1024,
+            bytes_per_sync: 0,
             sync_writes: false,
             index_type: IndexType::BTree,
+            startup_io_type: IOType::StandaradFIO,
         }
     }
 }
@@ -62,4 +67,10 @@ impl Default for WriteBatchOptions {
             sync_writes: true,
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum IOType {
+    StandaradFIO,
+    MemoryMapped,
 }

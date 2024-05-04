@@ -1,7 +1,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use bytes::Bytes;
-use jammdb::{DB, Error};
+use jammdb::{Error, DB};
 
 use crate::bitcask::{
     data::log_record::{decode_log_record_pos, LogRecordPos},
@@ -21,7 +21,8 @@ pub struct BPTree {
 
 impl BPTree {
     pub fn new(dir_path: PathBuf) -> Self {
-        let bptree = DB::open(dir_path.join(BPTREE_INDEX_FILE_NAME)).expect("failed to open bptree");
+        let bptree =
+            DB::open(dir_path.join(BPTREE_INDEX_FILE_NAME)).expect("failed to open bptree");
         let tree = Arc::new(bptree);
         let tx = tree.tx(true).expect("failed to begin tx");
         tx.get_or_create_bucket(BPTREE_BUCKET_NAME).unwrap();

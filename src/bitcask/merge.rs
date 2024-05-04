@@ -15,9 +15,9 @@ use super::{
         data_file::{get_data_file_name, DataFile, MERGE_FIN_FILE_NAME, SEQUENCE_NUMBER_FILE_NAME},
         log_record::{LogRecord, LogRecordType},
     },
-    db::{encode_log_record_key, parse_log_record_key, Engine},
+    db::{encode_log_record_key, parse_log_record_key, Engine, LOCK_FILE_NAME},
     errors::{Errors, Result},
-    options::Options,
+    options::{IOType, Options},
 };
 
 const MERGE_DIR_NAME: &str = "merge";
@@ -110,9 +110,9 @@ impl Engine {
         let mut active_file = self.active_file.write().unwrap();
         active_file.sync()?;
         let active_file_id = active_file.get_file_id();
-        let new_active_file = DataFile::new(&self.options.dir_path, active_file_id + 1)?;
+        let new_active_file = DataFile::new(&self.options.dir_path, active_file_id + 1, IOType::StandaradFIO)?;
         *active_file = new_active_file;
-        let old_file = DataFile::new(&self.options.dir_path, active_file_id)?;
+        let old_file = DataFile::new(&self.options.dir_path, active_file_id, IOType::StandaradFIO)?;
         old_files.insert(active_file_id, old_file);
 
         merge_file_ids.push(active_file_id);
@@ -120,7 +120,7 @@ impl Engine {
 
         let mut merge_files = Vec::new();
         for fid in &merge_file_ids {
-            let data_file = DataFile::new(&self.options.dir_path, *fid)?;
+            let data_file = DataFile::new(&self.options.dir_path, *fid, IOType::StandaradFIO)?;
             merge_files.push(data_file);
         }
 
@@ -156,10 +156,11 @@ pub(crate) fn load_merge_files(dir_path: &PathBuf) -> Result<()> {
             if file_name.ends_with(MERGE_FIN_FILE_NAME) {
                 merge_finished = true;
             }
-            // Ignore the file indicates the sequence number. It is possible to have a new 
+            // Ignore the file indicates the sequence number. It is possible to have a new
             // transaction happens during the merge process, so the old sequence number file
             // is outdated.
-            if file_name.ends_with(SEQUENCE_NUMBER_FILE_NAME) {
+            if file_name.ends_with(SEQUENCE_NUMBER_FILE_NAME) || file_name.ends_with(LOCK_FILE_NAME)
+            {
                 continue;
             }
             merge_file_names.push(entry.file_name());

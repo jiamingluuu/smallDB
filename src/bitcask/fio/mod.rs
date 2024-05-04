@@ -1,10 +1,13 @@
 pub mod file_io;
+pub mod mmap;
 
 use std::path::PathBuf;
 
 use crate::bitcask::errors::Result;
 
-use self::file_io::FileIO;
+use self::{file_io::FileIO, mmap::MMapIO};
+
+use super::options::IOType;
 
 /// IO managing abstraction.
 pub trait IOManager: Sync + Send {
@@ -16,12 +19,15 @@ pub trait IOManager: Sync + Send {
 
     /// Synchronize data.
     fn sync(&self) -> Result<()>;
-    
+
     /// Get the size of current data file.
     fn size(&self) -> u64;
 }
 
 /// Initialize IOMANAGER according to the file type.
-pub fn new_io_manager(file_name: PathBuf) -> Result<impl IOManager> {
-    FileIO::new(file_name)
+pub fn new_io_manager(file_name: PathBuf, io_type: IOType) -> Box<dyn IOManager> {
+    match io_type {
+        IOType::StandaradFIO => Box::new(FileIO::new(file_name).unwrap()),
+        IOType::MemoryMapped => Box::new(MMapIO::new(file_name).unwrap()),
+    }
 }

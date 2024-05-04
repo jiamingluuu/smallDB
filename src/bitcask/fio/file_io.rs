@@ -49,7 +49,7 @@ impl IOManager for FileIO {
         let file = self.file.read().unwrap();
         file.sync_all().map_err(|_| Errors::FailedToSyncToDataFile)
     }
-    
+
     fn size(&self) -> u64 {
         let file = self.file.read().unwrap();
         file.metadata().unwrap().len()
