@@ -3,13 +3,10 @@ use fs2::FileExt;
 use log::warn;
 use prost::{decode_length_delimiter, encode_length_delimiter};
 use std::{
-    collections::HashMap,
-    fs::{self, File},
-    path::PathBuf,
-    sync::{
+    collections::HashMap, fs::{self, File}, hint, path::PathBuf, sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex, RwLock,
-    },
+    }
 };
 
 use super::{
@@ -18,7 +15,7 @@ use super::{
     errors::{Errors, Result},
     index::{new_indexer, Indexer},
     merge::load_merge_files,
-    options::{IOType, IndexType, Options},
+    options::{IOType, IndexType, Options}, utils,
 };
 
 const INITIAL_FILE_ID: u32 = 1;
@@ -26,41 +23,69 @@ const SEQUENCE_NUMBER_KEY: &str = "seq-no";
 pub(crate) const LOCK_FILE_NAME: &str = "flock";
 
 /// struct used for storage, the running instance of Bitcask, where
-/// - `options` is the configuration for the database engine.
-/// - `active_file` indicates the current file that is used for storing all log record.
-/// - `old_files` stores all the closed data file, also called keydir.
-/// - `index` provides an interface for data file indexing.
-/// - `file_ids` collects all the data file id.
-/// - `batch_commit_lock` prevents race conditions while committing transaction.
-/// - `sequence_number` is an unique increasing identifier for transaction. 0 indicates the
-///     current data file is not committed by a transaction.
-/// - `merge_lock` prevents race condition during merge process.
-/// - `sequence_file_exists` and `is_first_time_init` disable the usage of BPTree if they
-///     where both set to true. Otherwise, after reboot, engine cannot obtain the current
-///     sequence number to perform a correct batch write.
-/// - `bytes_writes` records how many bytes were written by engine, used for automatic sync.
 pub struct Engine {
+    /// Rhe configuration for the database engine.
     pub(crate) options: Arc<Options>,
+
+    /// Records the current file that is used for storing all log record.
     pub(crate) active_file: Arc<RwLock<DataFile>>,
+
+    /// Records all the closed data file, also called keydir.
     pub(crate) old_files: Arc<RwLock<HashMap<u32, DataFile>>>,
+
+    /// Interface used for data file indexing.
     pub(crate) index: Box<dyn Indexer>,
+
+    /// A collection all the data file id.
     file_ids: Vec<u32>,
+
+    /// Prevents race conditions while committing transaction.
     pub(crate) batch_commit_lock: Mutex<()>,
+
+    /// An unique increasing identifier for transaction. 0 indicates the current data file is not committed by a 
+    /// transaction.
     pub(crate) sequence_number: Arc<AtomicUsize>,
+
+    /// Prevents race condition during merge process.
     pub(crate) merge_lock: Mutex<()>,
+
+    /// `sequence_file_exists` and `is_first_time_init` disable the usage of BPTree if they where both set to true.
+    /// Otherwise, after reboot, engine cannot obtain the current sequence number to perform a correct batch write.
     pub(crate) sequence_file_exists: bool,
     pub(crate) is_first_time_init: bool,
+
+    /// Used for ensuring only one engine instance is modifying the current keydir.
     lock_file: File,
+
+    /// Records how many bytes were written by engine, used for automatic sync.
     bytes_write: Arc<AtomicUsize>,
+    
+    /// Records how many bytes are available.
+    pub(crate) reclaim_size: Arc<AtomicUsize>,
+
+    /// Records the volume of storage that can be saved after merge process.
     io_type: IOType,
+}
+
+/// Statistics of the engine.
+pub struct Stat {
+    /// Number of keys in the engine.
+    key_num: usize,
+    
+    /// Number of data files in the engine.
+    data_file_num: usize,
+    
+    /// Data that can be compacted. 
+    reclaim_size: usize,
+    
+    /// The capacity occupied by the engine on disk.
+    disk_size: u64,
 }
 
 impl Engine {
     /// Open a bitcask instance with configuration OPTS.
     pub fn open(opts: Options) -> Result<Self> {
-        if let Some(e) = check_options(&opts) {
-            return Err(e);
-        }
+        check_options(&opts)?;
 
         let mut is_first_time_init = false;
         let options = opts.clone();
@@ -110,7 +135,7 @@ impl Engine {
         let active_file = match data_files.pop() {
             Some(v) => v,
             // It is possible to have an empty directory, so create an empty data file.
-            None => DataFile::new(&dir_path, INITIAL_FILE_ID, IOType::StandaradFIO)?,
+            None => DataFile::new(&dir_path, INITIAL_FILE_ID, IOType::StandardFIO)?,
         };
 
         let mut engine = Self {
@@ -126,7 +151,8 @@ impl Engine {
             is_first_time_init,
             lock_file,
             bytes_write: Arc::new(AtomicUsize::new(0)),
-            io_type: IOType::StandaradFIO,
+            reclaim_size: Arc::new(AtomicUsize::new(0)),
+            io_type: IOType::StandardFIO,
         };
 
         match engine.options.index_type {
@@ -182,6 +208,17 @@ impl Engine {
 
         Ok(())
     }
+    
+    pub fn stat(&self) -> Result<Stat> {
+        let keys = self.list_keys()?;
+        let data_files = self.old_files.read().unwrap();
+        Ok(Stat {
+            key_num: keys.len(),
+            data_file_num: data_files.len() + 1,
+            reclaim_size: self.reclaim_size.load(Ordering::SeqCst),
+            disk_size: utils::file::dir_disk_size(&self.options.dir_path),
+        })
+    }
 
     /// Write the pair (KEY, VALUE) into the database
     pub fn put(&self, key: Bytes, value: Bytes) -> Result<()> {
@@ -197,8 +234,8 @@ impl Engine {
 
         // Update the location of newest data.
         let log_record_pos = self.append_log_record(&mut log_record)?;
-        if !self.index.put(key.to_vec(), log_record_pos) {
-            return Err(Errors::IndexUpdateFailed);
+        if let Some(old_pos) = self.index.put(key.to_vec(), log_record_pos) {
+            self.reclaim_size.fetch_add(old_pos.size as usize, Ordering::SeqCst);
         }
 
         Ok(())
@@ -221,9 +258,11 @@ impl Engine {
             record_type: LogRecordType::Deleted,
         };
 
-        self.append_log_record(&mut log_record)?;
-        if !self.index.delete(key.to_vec()) {
-            return Err(Errors::IndexUpdateFailed);
+        let pos = self.append_log_record(&mut log_record)?;
+        self.reclaim_size.fetch_add(pos.size as usize, Ordering::SeqCst);
+
+        if let Some(old_pos) = self.index.delete(key.to_vec()) {
+            self.reclaim_size.fetch_add(old_pos.size as usize, Ordering::SeqCst);
         }
 
         Ok(())
@@ -290,11 +329,11 @@ impl Engine {
 
             // Close the current active file, and insert it into the keydir.
             let mut old_files = self.old_files.write().unwrap();
-            let old_file = DataFile::new(&dir_path, file_id, IOType::StandaradFIO)?;
+            let old_file = DataFile::new(&dir_path, file_id, IOType::StandardFIO)?;
             old_files.insert(file_id, old_file);
 
             // Create a new active file.
-            let new_file = DataFile::new(&dir_path, file_id + 1, IOType::StandaradFIO)?;
+            let new_file = DataFile::new(&dir_path, file_id + 1, IOType::StandardFIO)?;
             *active_file = new_file;
         }
 
@@ -321,6 +360,7 @@ impl Engine {
         Ok(LogRecordPos {
             file_id: active_file.get_file_id(),
             ofs: write_ofs,
+            size: encoded_record.len() as u32,
         })
     }
 
@@ -384,6 +424,7 @@ impl Engine {
                 let log_record_pos = LogRecordPos {
                     file_id: *file_id,
                     ofs,
+                    size: size as u32,
                 };
 
                 let (key, sequence_number) = parse_log_record_key(&log_record.key);
@@ -436,7 +477,7 @@ impl Engine {
         }
 
         // Load all log records from hint file to the indexer.
-        let hint_file = DataFile::new_hint_file(&hint_file_name)?;
+        let hint_file = DataFile::new_hint_file(&self.options.dir_path)?;
         let mut ofs = 0;
         loop {
             let (log_record, size) = match hint_file.read_log_record(ofs) {
@@ -485,19 +526,29 @@ impl Engine {
         log_record_pos: LogRecordPos,
     ) -> Result<()> {
         match record_type {
-            LogRecordType::Normal => self.index.put(key.clone(), log_record_pos),
-            LogRecordType::Deleted => self.index.delete(key.clone()),
-            _ => false,
+            LogRecordType::Normal => {
+                if let Some(old_pos) = self.index.put(key.clone(), log_record_pos) {
+                    self.reclaim_size.fetch_add(old_pos.size as usize, Ordering::SeqCst);
+                }
+            }
+            LogRecordType::Deleted => {
+                let mut size  = log_record_pos.size;
+                if let Some(old_pos) = self.index.delete(key.clone()) {
+                    size += old_pos.size;
+                }
+                self.reclaim_size.fetch_add(size as usize, Ordering::SeqCst);
+            }
+            _ => (),
         };
         Ok(())
     }
 
     fn reset_io_type(&self) {
         let mut active_file = self.active_file.write().unwrap();
-        active_file.set_io_manager(&self.options.dir_path, IOType::StandaradFIO);
+        active_file.set_io_manager(&self.options.dir_path, IOType::StandardFIO);
         let mut old_files = self.old_files.write().unwrap();
         for (_, file) in old_files.iter_mut() {
-            file.set_io_manager(&self.options.dir_path, IOType::StandaradFIO);
+            file.set_io_manager(&self.options.dir_path, IOType::StandardFIO);
         }
     }
 }
@@ -559,17 +610,21 @@ pub(crate) fn parse_log_record_key(key: &Vec<u8>) -> (Vec<u8>, usize) {
     (buf.to_vec(), sequence_number)
 }
 
-fn check_options(opts: &Options) -> Option<Errors> {
+fn check_options(opts: &Options) -> Result<()> {
     let dir_path = opts.dir_path.to_str();
     if dir_path.is_none() || dir_path.unwrap().len() == 0 {
-        return Some(Errors::DirPathIsEmpty);
+        return Err(Errors::DirPathIsEmpty);
     }
 
     if opts.data_file_size <= 0 {
-        return Some(Errors::DataFileSizeTooSmall);
+        return Err(Errors::DataFileSizeTooSmall);
     }
-
-    None
+    
+    if opts.data_file_merge_ratio < 0 as f32 || opts.data_file_merge_ratio > 1 as f32 {
+        return Err(Errors::InvalidMergeRatio);
+    }
+    
+    Ok(())
 }
 
 #[cfg(test)]
@@ -779,4 +834,30 @@ mod tests {
 
         std::fs::remove_dir_all(opts.clone().dir_path).expect("failed to remove path");
     }
+                        
+    #[test]
+    fn test_engine_stat() {
+        let mut opts = Options::default();
+        opts.dir_path = PathBuf::from("/tmp/bitcask-rs-stat");
+        let engine = Engine::open(opts.clone()).expect("failed to open engine");
+    
+        for i in 0..=10000 {
+            let res = engine.put(get_test_key(i), get_test_value(i));
+            assert!(res.is_ok());
+        }
+        for i in 0..=1000 {
+            let res = engine.put(get_test_key(i), get_test_value(i));
+            assert!(res.is_ok());
+        }
+        for i in 2000..=5000 {
+            let res = engine.delete(get_test_key(i));
+            assert!(res.is_ok());
+        }
+    
+        let stat = engine.stat().unwrap();
+        assert!(stat.reclaim_size > 0);
+    
+        std::fs::remove_dir_all(opts.clone().dir_path).expect("failed to remove path");
+    }
+
 }

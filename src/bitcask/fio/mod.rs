@@ -27,7 +27,7 @@ pub trait IOManager: Sync + Send {
 /// Initialize IOMANAGER according to the file type.
 pub fn new_io_manager(file_name: PathBuf, io_type: IOType) -> Box<dyn IOManager> {
     match io_type {
-        IOType::StandaradFIO => Box::new(FileIO::new(file_name).unwrap()),
+        IOType::StandardFIO => Box::new(FileIO::new(file_name).unwrap()),
         IOType::MemoryMapped => Box::new(MMapIO::new(file_name).unwrap()),
     }
 }

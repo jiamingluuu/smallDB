@@ -1,20 +1,28 @@
 use std::path::PathBuf;
 
 /// The configuration for database, where:
-/// - `dir_path` is the location of key directory.
-/// - `data_file_size` determines the threshold for active file size. The active data file is
-///     closed when if it exceeds this threshold.
-/// - `bytes_per_sync` determines when should we perform a synchronization of data.
-/// - `sync_writes` ensures the data sync persistence on writing if set to TRUE.
-/// - `index_type` determines the indexer used for storage.
 #[derive(Clone)]
 pub struct Options {
+    /// The location of key directory.
     pub dir_path: PathBuf,
+
+    /// The threshold for active file size. The active data file is closed when if it exceeds this threshold.
     pub data_file_size: u64,
+
+    /// The threshold of performing a synchronization of data.
     pub bytes_per_sync: usize,
+
+    /// The data persist to disk for every writing if set to TRUE.
     pub sync_writes: bool,
+
+    /// Determines the indexer used for storage.
     pub index_type: IndexType,
+
+    /// The IO type used for starting the engine.
     pub startup_io_type: IOType,
+    
+    /// Threshold for performing merge process.
+    pub data_file_merge_ratio: f32,
 }
 
 #[derive(Clone, PartialEq)]
@@ -32,7 +40,8 @@ impl Default for Options {
             bytes_per_sync: 0,
             sync_writes: false,
             index_type: IndexType::BTree,
-            startup_io_type: IOType::StandaradFIO,
+            startup_io_type: IOType::StandardFIO,
+            data_file_merge_ratio: 0.5,
         }
     }
 }
@@ -71,6 +80,6 @@ impl Default for WriteBatchOptions {
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum IOType {
-    StandaradFIO,
+    StandardFIO,
     MemoryMapped,
 }

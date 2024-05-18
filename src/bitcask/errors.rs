@@ -24,4 +24,7 @@ pub enum Errors {
     MergeInProgress,
     UnableToUseWriteBatch,
     DatabaseInUse,
+    InvalidMergeRatio,
+    MergeRationUnreached,
+    MergeNoEnoughSpace,
 }

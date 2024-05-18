@@ -15,13 +15,13 @@ use crate::bitcask::{
 /// Interface for data indexing abstraction.
 pub trait Indexer: Sync + Send {
     /// Write KEY to INDEXER at position POS.
-    fn put(&self, key: Vec<u8>, pos: LogRecordPos) -> bool;
+    fn put(&self, key: Vec<u8>, pos: LogRecordPos) -> Option<LogRecordPos>;
 
     /// Read KEY from INDEXER.
     fn get(&self, key: Vec<u8>) -> Option<LogRecordPos>;
 
     /// Delete the index associate with key KEY in the INDEXER.
-    fn delete(&self, key: Vec<u8>) -> bool;
+    fn delete(&self, key: Vec<u8>) -> Option<LogRecordPos>;
 
     /// Get all keys contained in the engine.
     fn list_keys(&self) -> Result<Vec<Bytes>>;
@@ -32,9 +32,11 @@ pub trait Indexer: Sync + Send {
 
 pub fn new_indexer(index_type: IndexType, dir_path: PathBuf) -> Box<dyn Indexer> {
     match index_type {
-        IndexType::BPTree => Box::new(bptree::BPTree::new(dir_path)),
         IndexType::BTree => Box::new(btree::BTree::new()),
-        IndexType::SkipList => Box::new(skiplist::SkipList::new()),
+        IndexType::BPTree => todo!(),
+        IndexType::SkipList => todo!(),
+        // IndexType::BPTree => Box::new(bptree::BPTree::new(dir_path)),
+        // IndexType::SkipList => Box::new(skiplist::SkipList::new()),
     }
 }
 

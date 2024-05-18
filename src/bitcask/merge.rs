@@ -7,17 +7,19 @@
 //!     data file but instead of storing the value, it contains the position and size of the
 //!     values within the corresponding data file.
 
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, sync::atomic::Ordering};
+
+use log::Record;
 
 use super::{
     batch::NON_TRANSACTION_SEQUENCE,
     data::{
-        data_file::{get_data_file_name, DataFile, MERGE_FIN_FILE_NAME, SEQUENCE_NUMBER_FILE_NAME},
+        data_file::{get_data_file_name, DataFile, DATA_FILE_NAME_SUFFIX, MERGE_FIN_FILE_NAME, SEQUENCE_NUMBER_FILE_NAME},
         log_record::{LogRecord, LogRecordType},
     },
     db::{encode_log_record_key, parse_log_record_key, Engine, LOCK_FILE_NAME},
     errors::{Errors, Result},
-    options::{IOType, Options},
+    options::{IOType, Options}, utils,
 };
 
 const MERGE_DIR_NAME: &str = "merge";
@@ -28,10 +30,25 @@ impl Engine {
     /// merge process, we clean all the deleted log record and construct a hint file used to
     /// speed up the engine startup time.
     pub fn merge(&self) -> Result<()> {
+        if self.is_empty_engine() {
+            return Ok(());
+        }
+
         let _merge_lock = self
             .merge_lock
             .try_lock()
             .map_err(|_| Errors::MergeInProgress)?;
+        
+        let reclaim_size = self.reclaim_size.load(Ordering::SeqCst);
+        let total_size = utils::file::dir_disk_size(&self.options.dir_path);
+        if (reclaim_size as f32) / (total_size as f32) < self.options.data_file_merge_ratio {
+            return Err(Errors::MergeRationUnreached);
+        }
+        
+        let available_size = utils::file::available_disk_size();
+        if total_size - reclaim_size as u64 > available_size {
+            return Err(Errors::MergeNoEnoughSpace);
+        }
 
         let merge_path = get_merge_path(&self.options.dir_path);
         if merge_path.is_dir() {
@@ -99,6 +116,15 @@ impl Engine {
 
         Ok(())
     }
+    
+    fn is_empty_engine(&self) -> bool {
+        let active_file = self.active_file.read().unwrap();
+        let old_files = self.old_files.read().unwrap();
+        if active_file.get_write_ofs() == 0 && old_files.len() == 0 {
+            return true;
+        }
+        false
+    }
 
     /// Get the list of all data files. Close and replace the current active file with a new one.
     fn get_merge_files(&self) -> Result<Vec<DataFile>> {
@@ -110,9 +136,13 @@ impl Engine {
         let mut active_file = self.active_file.write().unwrap();
         active_file.sync()?;
         let active_file_id = active_file.get_file_id();
-        let new_active_file = DataFile::new(&self.options.dir_path, active_file_id + 1, IOType::StandaradFIO)?;
+        let new_active_file = DataFile::new(
+            &self.options.dir_path,
+            active_file_id + 1,
+            IOType::StandardFIO,
+        )?;
         *active_file = new_active_file;
-        let old_file = DataFile::new(&self.options.dir_path, active_file_id, IOType::StandaradFIO)?;
+        let old_file = DataFile::new(&self.options.dir_path, active_file_id, IOType::StandardFIO)?;
         old_files.insert(active_file_id, old_file);
 
         merge_file_ids.push(active_file_id);
@@ -120,7 +150,7 @@ impl Engine {
 
         let mut merge_files = Vec::new();
         for fid in &merge_file_ids {
-            let data_file = DataFile::new(&self.options.dir_path, *fid, IOType::StandaradFIO)?;
+            let data_file = DataFile::new(&self.options.dir_path, *fid, IOType::StandardFIO)?;
             merge_files.push(data_file);
         }
 
@@ -156,13 +186,20 @@ pub(crate) fn load_merge_files(dir_path: &PathBuf) -> Result<()> {
             if file_name.ends_with(MERGE_FIN_FILE_NAME) {
                 merge_finished = true;
             }
+
             // Ignore the file indicates the sequence number. It is possible to have a new
             // transaction happens during the merge process, so the old sequence number file
             // is outdated.
-            if file_name.ends_with(SEQUENCE_NUMBER_FILE_NAME) || file_name.ends_with(LOCK_FILE_NAME)
-            {
+            if file_name.ends_with(SEQUENCE_NUMBER_FILE_NAME) || file_name.ends_with(LOCK_FILE_NAME) {
                 continue;
             }
+
+            // Skip empty files.
+            let meta = entry.metadata().unwrap();
+            if file_name.ends_with(DATA_FILE_NAME_SUFFIX) && meta.len() == 0 {
+                continue;
+            }
+
             merge_file_names.push(entry.file_name());
         }
     }
@@ -197,4 +234,177 @@ pub(crate) fn load_merge_files(dir_path: &PathBuf) -> Result<()> {
     fs::remove_dir_all(merge_path.clone()).unwrap();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bitcask::utils::rand_kv::{get_test_key, get_test_value};
+    use bytes::Bytes;
+    use std::{sync::Arc, thread};
+
+    #[test]
+    fn test_merge_1() {
+        let mut opts = Options::default();
+        opts.dir_path = PathBuf::from("/tmp/bitcask-rs-merge-1");
+        opts.data_file_size = 32 * 1024 * 1024;
+        let engine = Engine::open(opts.clone()).expect("failed to open engine");
+
+        let res1 = engine.merge();
+        assert!(res1.is_ok());
+
+        std::fs::remove_dir_all(opts.clone().dir_path).expect("failed to remove path");
+    }
+
+    #[test]
+    fn test_merge_2() {
+        let mut opts = Options::default();
+        opts.dir_path = PathBuf::from("/tmp/bitcask-rs-merge-2");
+        opts.data_file_size = 32 * 1024 * 1024;
+        opts.data_file_merge_ratio = 0 as f32;
+        let engine = Engine::open(opts.clone()).expect("failed to open engine");
+
+        for i in 0..50000 {
+            let put_res = engine.put(get_test_key(i), get_test_value(i));
+            assert!(put_res.is_ok());
+        }
+
+        let res1 = engine.merge();
+        assert!(res1.is_ok());
+
+        std::mem::drop(engine);
+
+        let engine2 = Engine::open(opts.clone()).expect("failed to open engine");
+        let keys = engine2.list_keys().unwrap();
+        assert_eq!(keys.len(), 50000);
+
+        for i in 0..50000 {
+            let get_res = engine2.get(get_test_key(i));
+            assert!(get_res.ok().unwrap().len() > 0);
+        }
+
+        std::fs::remove_dir_all(opts.clone().dir_path).expect("failed to remove path");
+    }
+
+    #[test]
+    fn test_merge_3() {
+        let mut opts = Options::default();
+        opts.dir_path = PathBuf::from("/tmp/bitcask-rs-merge-3");
+        opts.data_file_size = 32 * 1024 * 1024;
+        opts.data_file_merge_ratio = 0 as f32;
+        let engine = Engine::open(opts.clone()).expect("failed to open engine");
+
+        for i in 0..50000 {
+            let put_res = engine.put(get_test_key(i), get_test_value(i));
+            assert!(put_res.is_ok());
+        }
+        for i in 0..10000 {
+            let put_res = engine.put(get_test_key(i), Bytes::from("new value in merge"));
+            assert!(put_res.is_ok());
+        }
+        for i in 40000..50000 {
+            let del_res = engine.delete(get_test_key(i));
+            assert!(del_res.is_ok());
+        }
+
+        let res1 = engine.merge();
+        assert!(res1.is_ok());
+
+        std::mem::drop(engine);
+
+        let engine2 = Engine::open(opts.clone()).expect("failed to open engine");
+        let keys = engine2.list_keys().unwrap();
+        assert_eq!(keys.len(), 40000);
+
+        for i in 0..10000 {
+            let get_res = engine2.get(get_test_key(i));
+            assert_eq!(Bytes::from("new value in merge"), get_res.ok().unwrap());
+        }
+
+        std::fs::remove_dir_all(opts.clone().dir_path).expect("failed to remove path");
+    }
+
+    #[test]
+    fn test_merge_4() {
+        let mut opts = Options::default();
+        opts.dir_path = PathBuf::from("/tmp/bitcask-rs-merge-4");
+        opts.data_file_size = 32 * 1024 * 1024;
+        opts.data_file_merge_ratio = 0 as f32;
+        let engine = Engine::open(opts.clone()).expect("failed to open engine");
+
+        for i in 0..50000 {
+            let put_res = engine.put(get_test_key(i), get_test_value(i));
+            assert!(put_res.is_ok());
+            let del_res = engine.delete(get_test_key(i));
+            assert!(del_res.is_ok());
+        }
+
+        let res1 = engine.merge();
+        assert!(res1.is_ok());
+
+        std::mem::drop(engine);
+
+        let engine2 = Engine::open(opts.clone()).expect("failed to open engine");
+        let keys = engine2.list_keys().unwrap();
+        assert_eq!(keys.len(), 0);
+
+        for i in 0..50000 {
+            let get_res = engine2.get(get_test_key(i));
+            assert_eq!(Errors::KeyNotFound, get_res.err().unwrap());
+        }
+
+        std::fs::remove_dir_all(opts.clone().dir_path).expect("failed to remove path");
+    }
+
+    #[test]
+    fn test_merge_5() {
+        let mut opts = Options::default();
+        opts.dir_path = PathBuf::from("/tmp/bitcask-rs-merge-5");
+        opts.data_file_size = 32 * 1024 * 1024;
+        opts.data_file_merge_ratio = 0 as f32;
+        let engine = Engine::open(opts.clone()).expect("failed to open engine");
+
+        for i in 0..50000 {
+            let put_res = engine.put(get_test_key(i), get_test_value(i));
+            assert!(put_res.is_ok());
+        }
+        for i in 0..10000 {
+            let put_res = engine.put(get_test_key(i), Bytes::from("new value in merge"));
+            assert!(put_res.is_ok());
+        }
+        for i in 40000..50000 {
+            let del_res = engine.delete(get_test_key(i));
+            assert!(del_res.is_ok());
+        }
+
+        let eng = Arc::new(engine);
+
+        let mut handles = vec![];
+        let eng1 = eng.clone();
+        let handle1 = thread::spawn(move || {
+            for i in 60000..100000 {
+                let put_res = eng1.put(get_test_key(i), get_test_value(i));
+                assert!(put_res.is_ok());
+            }
+        });
+        handles.push(handle1);
+
+        let eng2 = eng.clone();
+        let handle2 = thread::spawn(move || {
+            let merge_res = eng2.merge();
+            assert!(merge_res.is_ok());
+        });
+        handles.push(handle2);
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        std::mem::drop(eng);
+        let engine2 = Engine::open(opts.clone()).expect("failed to open engine");
+        let keys = engine2.list_keys().unwrap();
+        assert_eq!(keys.len(), 80000);
+
+        std::fs::remove_dir_all(opts.clone().dir_path).expect("failed to remove path");
+    }
 }

@@ -1,6 +1,6 @@
 //! A transaction is a group of database operations that is either
-//! - successes, so the database state is updated, or
-//! - failed, so the database rolls back to the original state priori to the transaction.
+//! - successes (committed), so the database state is updated, or
+//! - failed, so the database rollbacks to the original state prior to the transaction.
 //!
 //! A transaction needs to satisfy ACID principle, that is:
 //! - Atomicity: Each transaction is treated as a single "unit".
@@ -23,7 +23,7 @@
 
 use std::{
     collections::HashMap,
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{atomic::Ordering, Arc, Mutex}, usize,
 };
 
 use bytes::Bytes;
@@ -153,10 +153,17 @@ impl WriteBatch<'_> {
             match item.record_type {
                 LogRecordType::Normal => {
                     let record_pos = position.get(&item.key).unwrap();
-                    self.engine.index.put(item.key.clone(), *record_pos)
+                    if let Some(old_pos) = self.engine.index.put(item.key.clone(), *record_pos) {
+                        self.engine.reclaim_size.fetch_add(old_pos.size as usize, Ordering::SeqCst);
+                    }
                 }
-                LogRecordType::Deleted => self.engine.index.delete(item.key.clone()),
-                _ => false,
+                LogRecordType::Deleted => {
+                    if let Some(old_pos) = self.engine.index.delete(item.key.clone()) {
+                        self.engine.reclaim_size.fetch_add(old_pos.size as usize, Ordering::SeqCst);
+                    }
+
+                }
+                _ => (),
             };
         }
 

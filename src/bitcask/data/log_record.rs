@@ -42,12 +42,16 @@ pub struct TransactionRecord {
 }
 
 /// struct used for log record lookup within a data file, where:
-/// - `file_id` is a id of the data file.
-/// - `ofs` indicates the position of log record to be looked up.
 #[derive(Clone, Copy)]
 pub struct LogRecordPos {
+    /// The identifier of the file read.
     pub(crate) file_id: u32,
+
+    /// The offset of log record to be looked up.
     pub(crate) ofs: u64,
+    
+    /// The size of log record on disk.
+    pub(crate) size: u32,
 }
 
 impl LogRecord {
@@ -108,6 +112,7 @@ impl LogRecordPos {
         let mut buf = BytesMut::new();
         encode_varint(self.file_id as u64, &mut buf);
         encode_varint(self.ofs, &mut buf);
+        encode_varint(self.size as u64, &mut buf);
         buf.to_vec()
     }
 }
@@ -123,9 +128,14 @@ pub fn decode_log_record_pos(pos: Vec<u8>) -> LogRecordPos {
         Ok(ofs) => ofs,
         Err(e) => panic!("decode log record pos Error: {}", e),
     };
+    let size = match decode_varint(&mut buf) {
+        Ok(size) => size,
+        Err(e) => panic!("decode log record pos Error: {}", e),
+    };
     LogRecordPos {
         file_id: fid as u32,
         ofs,
+        size: size as u32,
     }
 }
 

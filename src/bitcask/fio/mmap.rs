@@ -16,11 +16,16 @@ pub struct MMapIO {
 
 impl MMapIO {
     pub fn new(file_name: PathBuf) -> Result<Self> {
-        match OpenOptions::new().create(true).read(true).write(true).open(file_name) {
+        match OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(file_name)
+        {
             Ok(file) => Ok(MMapIO {
                 map: Arc::new(Mutex::new(unsafe {
                     Mmap::map(&file).expect("failed to map the file")
-                }))
+                })),
             }),
             Err(e) => {
                 eprintln!("[FileIO: new] Failed to open data file, {}", e);
