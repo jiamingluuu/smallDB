@@ -5,7 +5,7 @@ use std::{
 
 use bytes::Bytes;
 
-use crate::bitcask::{
+use crate::{
     data::log_record::LogRecordPos,
     errors::Result,
     index::{IndexIterator, Indexer},

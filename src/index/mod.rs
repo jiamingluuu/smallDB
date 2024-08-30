@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use bytes::Bytes;
 
-use crate::bitcask::{
+use crate::{
     data::log_record::LogRecordPos,
     errors::Result,
     options::{IndexType, IteratorOptions},
@@ -33,10 +33,8 @@ pub trait Indexer: Sync + Send {
 pub fn new_indexer(index_type: IndexType, dir_path: PathBuf) -> Box<dyn Indexer> {
     match index_type {
         IndexType::BTree => Box::new(btree::BTree::new()),
-        IndexType::BPTree => todo!(),
-        IndexType::SkipList => todo!(),
-        // IndexType::BPTree => Box::new(bptree::BPTree::new(dir_path)),
-        // IndexType::SkipList => Box::new(skiplist::SkipList::new()),
+        IndexType::BPTree => Box::new(bptree::BPTree::new(dir_path)),
+        IndexType::SkipList => Box::new(skiplist::SkipList::new()),
     }
 }
 

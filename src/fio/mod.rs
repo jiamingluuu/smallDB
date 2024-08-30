@@ -3,7 +3,7 @@ pub mod mmap;
 
 use std::path::PathBuf;
 
-use crate::bitcask::errors::Result;
+use crate::errors::Result;
 
 use self::{file_io::FileIO, mmap::MMapIO};
 

@@ -9,17 +9,19 @@
 
 use std::{fs, path::PathBuf, sync::atomic::Ordering};
 
-use log::Record;
-
-use super::{
+use crate::{
     batch::NON_TRANSACTION_SEQUENCE,
     data::{
-        data_file::{get_data_file_name, DataFile, DATA_FILE_NAME_SUFFIX, MERGE_FIN_FILE_NAME, SEQUENCE_NUMBER_FILE_NAME},
+        data_file::{
+            get_data_file_name, DataFile, DATA_FILE_NAME_SUFFIX, MERGE_FIN_FILE_NAME,
+            SEQUENCE_NUMBER_FILE_NAME,
+        },
         log_record::{LogRecord, LogRecordType},
     },
     db::{encode_log_record_key, parse_log_record_key, Engine, LOCK_FILE_NAME},
     errors::{Errors, Result},
-    options::{IOType, Options}, utils,
+    options::{IOType, Options},
+    utils,
 };
 
 const MERGE_DIR_NAME: &str = "merge";
@@ -38,13 +40,13 @@ impl Engine {
             .merge_lock
             .try_lock()
             .map_err(|_| Errors::MergeInProgress)?;
-        
+
         let reclaim_size = self.reclaim_size.load(Ordering::SeqCst);
         let total_size = utils::file::dir_disk_size(&self.options.dir_path);
         if (reclaim_size as f32) / (total_size as f32) < self.options.data_file_merge_ratio {
             return Err(Errors::MergeRationUnreached);
         }
-        
+
         let available_size = utils::file::available_disk_size();
         if total_size - reclaim_size as u64 > available_size {
             return Err(Errors::MergeNoEnoughSpace);
@@ -116,7 +118,7 @@ impl Engine {
 
         Ok(())
     }
-    
+
     fn is_empty_engine(&self) -> bool {
         let active_file = self.active_file.read().unwrap();
         let old_files = self.old_files.read().unwrap();
@@ -190,7 +192,8 @@ pub(crate) fn load_merge_files(dir_path: &PathBuf) -> Result<()> {
             // Ignore the file indicates the sequence number. It is possible to have a new
             // transaction happens during the merge process, so the old sequence number file
             // is outdated.
-            if file_name.ends_with(SEQUENCE_NUMBER_FILE_NAME) || file_name.ends_with(LOCK_FILE_NAME) {
+            if file_name.ends_with(SEQUENCE_NUMBER_FILE_NAME) || file_name.ends_with(LOCK_FILE_NAME)
+            {
                 continue;
             }
 
@@ -239,7 +242,7 @@ pub(crate) fn load_merge_files(dir_path: &PathBuf) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bitcask::utils::rand_kv::{get_test_key, get_test_value};
+    use crate::utils::rand_kv::{get_test_key, get_test_value};
     use bytes::Bytes;
     use std::{sync::Arc, thread};
 

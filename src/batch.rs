@@ -23,12 +23,13 @@
 
 use std::{
     collections::HashMap,
-    sync::{atomic::Ordering, Arc, Mutex}, usize,
+    sync::{atomic::Ordering, Arc, Mutex},
+    usize,
 };
 
 use bytes::Bytes;
 
-use super::{
+use crate::{
     data::log_record::{LogRecord, LogRecordType},
     db::{encode_log_record_key, Engine},
     errors::{Errors, Result},
@@ -154,14 +155,17 @@ impl WriteBatch<'_> {
                 LogRecordType::Normal => {
                     let record_pos = position.get(&item.key).unwrap();
                     if let Some(old_pos) = self.engine.index.put(item.key.clone(), *record_pos) {
-                        self.engine.reclaim_size.fetch_add(old_pos.size as usize, Ordering::SeqCst);
+                        self.engine
+                            .reclaim_size
+                            .fetch_add(old_pos.size as usize, Ordering::SeqCst);
                     }
                 }
                 LogRecordType::Deleted => {
                     if let Some(old_pos) = self.engine.index.delete(item.key.clone()) {
-                        self.engine.reclaim_size.fetch_add(old_pos.size as usize, Ordering::SeqCst);
+                        self.engine
+                            .reclaim_size
+                            .fetch_add(old_pos.size as usize, Ordering::SeqCst);
                     }
-
                 }
                 _ => (),
             };
@@ -175,7 +179,7 @@ impl WriteBatch<'_> {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::bitcask::{options::Options, utils};
+    use crate::{options::Options, utils};
 
     use super::*;
 

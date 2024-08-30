@@ -1,7 +1,7 @@
 use std::fs;
 
 use bytes::Bytes;
-use smallDB::bitcask::{db, options::Options};
+use smallDB::{db, options::Options};
 
 fn main() {
     let opts = Options::default();

@@ -6,8 +6,10 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use crate::bitcask::errors::{Errors, Result};
-use crate::bitcask::fio::IOManager;
+use crate::{
+    errors::{Errors, Result},
+    fio::IOManager,
+};
 
 pub struct FileIO {
     pub(crate) file: Arc<RwLock<File>>,

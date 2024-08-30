@@ -3,19 +3,23 @@ use fs2::FileExt;
 use log::warn;
 use prost::{decode_length_delimiter, encode_length_delimiter};
 use std::{
-    collections::HashMap, fs::{self, File}, hint, path::PathBuf, sync::{
+    collections::HashMap,
+    fs::{self, File},
+    path::PathBuf,
+    sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex, RwLock,
-    }
+    },
 };
 
-use super::{
+use crate::{
     batch::NON_TRANSACTION_SEQUENCE,
     data::{data_file::*, log_record::*},
     errors::{Errors, Result},
     index::{new_indexer, Indexer},
     merge::load_merge_files,
-    options::{IOType, IndexType, Options}, utils,
+    options::{IOType, IndexType, Options},
+    utils,
 };
 
 const INITIAL_FILE_ID: u32 = 1;
@@ -42,7 +46,7 @@ pub struct Engine {
     /// Prevents race conditions while committing transaction.
     pub(crate) batch_commit_lock: Mutex<()>,
 
-    /// An unique increasing identifier for transaction. 0 indicates the current data file is not committed by a 
+    /// An unique increasing identifier for transaction. 0 indicates the current data file is not committed by a
     /// transaction.
     pub(crate) sequence_number: Arc<AtomicUsize>,
 
@@ -59,7 +63,7 @@ pub struct Engine {
 
     /// Records how many bytes were written by engine, used for automatic sync.
     bytes_write: Arc<AtomicUsize>,
-    
+
     /// Records how many bytes are available.
     pub(crate) reclaim_size: Arc<AtomicUsize>,
 
@@ -71,13 +75,13 @@ pub struct Engine {
 pub struct Stat {
     /// Number of keys in the engine.
     key_num: usize,
-    
+
     /// Number of data files in the engine.
     data_file_num: usize,
-    
-    /// Data that can be compacted. 
+
+    /// Data that can be compacted.
     reclaim_size: usize,
-    
+
     /// The capacity occupied by the engine on disk.
     disk_size: u64,
 }
@@ -157,7 +161,7 @@ impl Engine {
 
         match engine.options.index_type {
             IndexType::BTree | IndexType::SkipList => {
-                // Load index from hint file to speed up the reboot of bitcask engine after shutdown.
+                // Load index from hint file to speed up the reboot of bitcask engine.
                 engine.load_index_from_hint_file()?;
 
                 let current_sequence_number = engine.load_index_from_data_files()?;
@@ -208,7 +212,7 @@ impl Engine {
 
         Ok(())
     }
-    
+
     pub fn stat(&self) -> Result<Stat> {
         let keys = self.list_keys()?;
         let data_files = self.old_files.read().unwrap();
@@ -235,7 +239,8 @@ impl Engine {
         // Update the location of newest data.
         let log_record_pos = self.append_log_record(&mut log_record)?;
         if let Some(old_pos) = self.index.put(key.to_vec(), log_record_pos) {
-            self.reclaim_size.fetch_add(old_pos.size as usize, Ordering::SeqCst);
+            self.reclaim_size
+                .fetch_add(old_pos.size as usize, Ordering::SeqCst);
         }
 
         Ok(())
@@ -259,10 +264,12 @@ impl Engine {
         };
 
         let pos = self.append_log_record(&mut log_record)?;
-        self.reclaim_size.fetch_add(pos.size as usize, Ordering::SeqCst);
+        self.reclaim_size
+            .fetch_add(pos.size as usize, Ordering::SeqCst);
 
         if let Some(old_pos) = self.index.delete(key.to_vec()) {
-            self.reclaim_size.fetch_add(old_pos.size as usize, Ordering::SeqCst);
+            self.reclaim_size
+                .fetch_add(old_pos.size as usize, Ordering::SeqCst);
         }
 
         Ok(())
@@ -528,11 +535,12 @@ impl Engine {
         match record_type {
             LogRecordType::Normal => {
                 if let Some(old_pos) = self.index.put(key.clone(), log_record_pos) {
-                    self.reclaim_size.fetch_add(old_pos.size as usize, Ordering::SeqCst);
+                    self.reclaim_size
+                        .fetch_add(old_pos.size as usize, Ordering::SeqCst);
                 }
             }
             LogRecordType::Deleted => {
-                let mut size  = log_record_pos.size;
+                let mut size = log_record_pos.size;
                 if let Some(old_pos) = self.index.delete(key.clone()) {
                     size += old_pos.size;
                 }
@@ -619,11 +627,11 @@ fn check_options(opts: &Options) -> Result<()> {
     if opts.data_file_size <= 0 {
         return Err(Errors::DataFileSizeTooSmall);
     }
-    
+
     if opts.data_file_merge_ratio < 0 as f32 || opts.data_file_merge_ratio > 1 as f32 {
         return Err(Errors::InvalidMergeRatio);
     }
-    
+
     Ok(())
 }
 
@@ -634,10 +642,10 @@ mod tests {
     use bytes::Bytes;
 
     use crate::{
-        bitcask::db::Engine,
-        bitcask::errors::Errors,
-        bitcask::options::Options,
-        bitcask::utils::rand_kv::{get_test_key, get_test_value},
+        db::Engine,
+        errors::Errors,
+        options::Options,
+        utils::rand_kv::{get_test_key, get_test_value},
     };
 
     #[test]
@@ -834,13 +842,13 @@ mod tests {
 
         std::fs::remove_dir_all(opts.clone().dir_path).expect("failed to remove path");
     }
-                        
+
     #[test]
     fn test_engine_stat() {
         let mut opts = Options::default();
         opts.dir_path = PathBuf::from("/tmp/bitcask-rs-stat");
         let engine = Engine::open(opts.clone()).expect("failed to open engine");
-    
+
         for i in 0..=10000 {
             let res = engine.put(get_test_key(i), get_test_value(i));
             assert!(res.is_ok());
@@ -853,11 +861,10 @@ mod tests {
             let res = engine.delete(get_test_key(i));
             assert!(res.is_ok());
         }
-    
+
         let stat = engine.stat().unwrap();
         assert!(stat.reclaim_size > 0);
-    
+
         std::fs::remove_dir_all(opts.clone().dir_path).expect("failed to remove path");
     }
-
 }

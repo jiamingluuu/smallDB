@@ -20,7 +20,7 @@ pub struct Options {
 
     /// The IO type used for starting the engine.
     pub startup_io_type: IOType,
-    
+
     /// Threshold for performing merge process.
     pub data_file_merge_ratio: f32,
 }

@@ -5,7 +5,7 @@ use prost::{
     length_delimiter_len,
 };
 
-use crate::bitcask::data::data_file::CRC_LEN;
+use crate::data::data_file::CRC_LEN;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LogRecordType {
@@ -49,7 +49,7 @@ pub struct LogRecordPos {
 
     /// The offset of log record to be looked up.
     pub(crate) ofs: u64,
-    
+
     /// The size of log record on disk.
     pub(crate) size: u32,
 }

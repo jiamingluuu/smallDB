@@ -3,7 +3,7 @@ use std::{path::PathBuf, sync::Arc};
 use bytes::Bytes;
 use jammdb::DB;
 
-use crate::bitcask::{
+use crate::{
     data::log_record::{decode_log_record_pos, LogRecordPos},
     errors::Result,
     index::Indexer,

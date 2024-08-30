@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use crate::bitcask::{
+use crate::{
     data::log_record::{max_log_record_header_size, LogRecord, LogRecordType},
     errors::{Errors, Result},
     fio::{new_io_manager, IOManager},
@@ -128,10 +128,6 @@ impl DataFile {
         }
 
         Ok((log_record, header_size + key_size + value_size + 4))
-    }
-
-    pub fn read(&self, buf: &mut [u8], ofs: usize) -> Result<usize> {
-        todo!()
     }
 
     pub fn write(&self, buf: &[u8]) -> Result<usize> {

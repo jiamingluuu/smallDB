@@ -1,6 +1,10 @@
-#![allow(dead_code)]
-
-pub mod bitcask;
-pub mod parser;
-pub mod row;
-pub mod table;
+pub mod batch;
+pub mod data;
+pub mod db;
+pub mod errors;
+pub mod fio;
+pub mod index;
+pub mod iterator;
+pub mod merge;
+pub mod options;
+pub mod utils;

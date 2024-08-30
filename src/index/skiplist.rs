@@ -3,11 +3,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use crossbeam_skiplist::SkipMap;
 
-use crate::bitcask::{
-    data::log_record::LogRecordPos,
-    errors::Result,
-    options::IteratorOptions
-};
+use crate::{data::log_record::LogRecordPos, errors::Result, options::IteratorOptions};
 
 use super::{IndexIterator, Indexer};
 

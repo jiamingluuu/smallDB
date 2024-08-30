@@ -3,7 +3,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use std::sync::RwLock;
 
-use super::{db::Engine, errors::Result, index::IndexIterator, options::IteratorOptions};
+use crate::{db::Engine, errors::Result, index::IndexIterator, options::IteratorOptions};
 
 pub struct Iterator<'a> {
     index_iter: Arc<RwLock<Box<dyn IndexIterator>>>,
@@ -68,7 +68,7 @@ impl Iterator<'_> {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::bitcask::{options::Options, utils};
+    use crate::{options::Options, utils};
 
     use super::*;
 

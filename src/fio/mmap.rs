@@ -6,7 +6,7 @@ use std::{
 
 use memmap2::Mmap;
 
-use crate::bitcask::errors::{Errors, Result};
+use crate::errors::{Errors, Result};
 
 use super::IOManager;
 
@@ -65,7 +65,7 @@ impl IOManager for MMapIO {
 mod tests {
     use std::fs;
 
-    use crate::bitcask::fio::file_io::FileIO;
+    use crate::fio::file_io::FileIO;
 
     use super::*;
 
